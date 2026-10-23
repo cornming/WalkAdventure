@@ -1,0 +1,8 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.apk
+
+# 固定的 debug 簽章金鑰要提交（說明見 keystore/README.md）
+!keystore/debug.keystore

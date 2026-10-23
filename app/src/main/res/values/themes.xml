@@ -1,0 +1,5 @@
+<resources>
+<style name="Theme.WalkAdventure" parent="android:style/Theme.Material.Light.NoActionBar">
+    <item name="android:fontFamily">sans</item><item name="android:windowLightStatusBar">true</item><item name="android:statusBarColor">#FFF7E8</item><item name="android:navigationBarColor">#FFF7E8</item><item name="android:colorAccent">#7B5E57</item>
+</style>
+</resources>
