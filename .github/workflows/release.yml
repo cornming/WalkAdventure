@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# 同時只跑一個，避免兩次推送搶同一個版本標籤
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # 需要完整歷史與標籤，才能算版號與整理 Release 說明
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10'
+
+      - name: Compute version
+        id: ver
+        run: |
+          VERSION="$(bash .github/scripts/next-version.sh)"
+          PREV_TAG="$(bash .github/scripts/next-version.sh --prev-tag)"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "prev_tag=${PREV_TAG}" >> "$GITHUB_OUTPUT"
+          echo "versionName=${VERSION}  versionCode=${GITHUB_RUN_NUMBER}  previous tag='${PREV_TAG}'"
+
+      - name: Build debug APK
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+          VERSION_NAME: ${{ steps.ver.outputs.version }}
+        run: gradle --no-daemon assembleDebug
+
+      - name: Show APK signing certificate
+        run: |
+          APKSIGNER="$(ls -d "${ANDROID_HOME}"/build-tools/*/apksigner | sort -V | tail -n1)"
+          "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Name the APK
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: cp app/build/outputs/apk/debug/app-debug.apk "WalkAdventure-v${VERSION}.apk"
+
+      - name: Build release notes
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          PREV_TAG: ${{ steps.ver.outputs.prev_tag }}
+        run: bash .github/scripts/release-notes.sh "$VERSION" "$PREV_TAG" > release-notes.md
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          TAG="v${VERSION}"
+          if git rev-parse -q --verify "refs/tags/${TAG}" > /dev/null; then
+            echo "::notice::標籤 ${TAG} 已存在（上一個標籤之後沒有新提交），略過發佈。"
+            exit 0
+          fi
+          gh release create "$TAG" "WalkAdventure-v${VERSION}.apk" \
+            --target "$GITHUB_SHA" \
+            --title "WalkAdventure ${TAG}" \
+            --notes-file release-notes.md
