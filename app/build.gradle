@@ -1,5 +1,33 @@
 plugins { id 'com.android.application' }
 
-android { namespace 'com.cornming.walkadventure'; compileSdk 35
-    defaultConfig { applicationId 'com.cornming.walkadventure'; minSdk 26; targetSdk 35; versionCode 1; versionName '0.1.0' }
+// 版號由 CI 以環境變數帶入（見 .github/workflows/release.yml）；本機建置沒設定時用預設值。
+def envOrDefault = { String name, String fallback ->
+    def value = System.getenv(name)
+    (value != null && !value.trim().isEmpty()) ? value.trim() : fallback
+}
+def appVersionCode = envOrDefault('VERSION_CODE', '1').toInteger()
+def appVersionName = envOrDefault('VERSION_NAME', '0.1.0')
+
+android {
+    namespace 'com.cornming.walkadventure'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.cornming.walkadventure'
+        minSdk 26
+        targetSdk 35
+        versionCode appVersionCode
+        versionName appVersionName
+    }
+
+    // 固定的 debug 簽章金鑰（公開在 repo 中，說明見 keystore/README.md）。
+    // 每次建置都用同一把，新版才能直接覆蓋安裝舊版。
+    signingConfigs {
+        debug {
+            storeFile rootProject.file('keystore/debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
 }
