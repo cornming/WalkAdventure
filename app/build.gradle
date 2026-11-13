@@ -31,3 +31,8 @@ android {
         }
     }
 }
+
+dependencies {
+    // 只有單元測試用得到（StepProgressTest），不會打包進 APK
+    testImplementation 'junit:junit:4.13.2'
+}
