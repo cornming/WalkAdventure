@@ -17,6 +17,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.view.View;
+import android.view.WindowInsets;
 import android.widget.Toast;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -154,6 +155,11 @@ public class MainActivity extends Activity implements SensorEventListener {
     @Override public void onAccuracyChanged(Sensor s, int a) {}
 
     class GameView extends View {
+        // 畫面以 540 寬的設計座標排版，再依螢幕寬度等比例放大，
+        // 不同解析度與像素密度的手機看到的比例才會一樣。
+        private static final float DESIGN_WIDTH = 540f;
+        private static final float DESIGN_HEIGHT = 690f;
+
         private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Typeface regular = Typeface.create("sans", Typeface.NORMAL);
         private final Typeface bold = Typeface.create("sans", Typeface.BOLD);
@@ -161,10 +167,29 @@ public class MainActivity extends Activity implements SensorEventListener {
         String message = "準備出發！每一步都是冒險進度。";
         boolean sensorMissing = false;
         boolean permissionMissing = false;
+        // 狀態列、導覽列與瀏海佔掉的邊界（Android 15 起畫面預設延伸到系統列底下）
+        private int insetLeft, insetTop, insetRight, insetBottom;
 
         GameView(Context c) {
             super(c);
             setBackgroundColor(Color.rgb(255, 247, 232));
+        }
+
+        @Override public WindowInsets onApplyWindowInsets(WindowInsets insets) {
+            if (Build.VERSION.SDK_INT >= 30) {
+                android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                insetLeft = bars.left;
+                insetTop = bars.top;
+                insetRight = bars.right;
+                insetBottom = bars.bottom;
+            } else {
+                insetLeft = insets.getSystemWindowInsetLeft();
+                insetTop = insets.getSystemWindowInsetTop();
+                insetRight = insets.getSystemWindowInsetRight();
+                insetBottom = insets.getSystemWindowInsetBottom();
+            }
+            invalidate();
+            return super.onApplyWindowInsets(insets);
         }
 
         void text(Canvas c, String s, float x, float y, float size, boolean isBold) {
@@ -176,7 +201,15 @@ public class MainActivity extends Activity implements SensorEventListener {
 
         @Override protected void onDraw(Canvas c) {
             super.onDraw(c);
-            float w = getWidth();
+            float availableWidth = getWidth() - insetLeft - insetRight;
+            float availableHeight = getHeight() - insetTop - insetBottom;
+            float scale = Math.min(availableWidth / DESIGN_WIDTH, availableHeight / DESIGN_HEIGHT);
+            if (scale <= 0) return;
+            c.save();
+            c.translate(insetLeft, insetTop);
+            c.scale(scale, scale);
+            // 以下座標都是設計座標；w 是設計座標下的可用寬度
+            float w = availableWidth / scale;
 
             long xp = progress.xp();
             float xpRatio = xp / (float) StepProgress.STEPS_PER_CHEST;
@@ -225,6 +258,7 @@ public class MainActivity extends Activity implements SensorEventListener {
             else if (permissionMissing) text(c, "尚未允許「活動辨識」權限，無法計步。點一下畫面重新授權。", 25, 625, 14, true);
             else text(c, "步數感測器已連線 • 關閉 App 也會保留進度", 25, 625, 13, false);
             text(c, "今天走得越多，冒險世界就越遠。", 25, 665, 16, true);
+            c.restore();
         }
     }
 }
