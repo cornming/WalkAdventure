@@ -44,6 +44,10 @@ jobs:
           echo "prev_tag=${PREV_TAG}" >> "$GITHUB_OUTPUT"
           echo "versionName=${VERSION}  versionCode=${GITHUB_RUN_NUMBER}  previous tag='${PREV_TAG}'"
 
+      # 計步規則的單元測試沒過就不建置、不發佈
+      - name: Run unit tests
+        run: gradle --no-daemon testDebugUnitTest
+
       - name: Build debug APK
         env:
           VERSION_CODE: ${{ github.run_number }}
