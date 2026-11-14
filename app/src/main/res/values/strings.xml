@@ -2,6 +2,15 @@
 <resources>
     <string name="app_name">走走冒險</string>
     <string name="version_label">v%1$s</string>
+    <string name="tab_adventure">冒險</string>
+    <string name="tab_adventure_alert">冒險 (!)</string>
+    <string name="tab_shop">商店</string>
+    <string name="tab_report">戰報</string>
+    <string name="tab_report_badge">戰報 (%1$d)</string>
+    <string name="biome_prev">◀ 上一區</string>
+    <string name="biome_next">下一區 ▶</string>
+    <string name="copy_report">複製今日冒險戰報</string>
+    <string name="report_copied">已複製今日戰報到剪貼簿</string>
     <string name="update_check">檢查更新</string>
     <string name="update_checking">檢查中…</string>
     <string name="update_downloading">下載新版中…</string>
