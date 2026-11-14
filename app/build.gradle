@@ -5,7 +5,8 @@ def envOrDefault = { String name, String fallback ->
     def value = System.getenv(name)
     (value != null && !value.trim().isEmpty()) ? value.trim() : fallback
 }
-def appVersionCode = envOrDefault('VERSION_CODE', '1').toInteger()
+def rawVersionCode = envOrDefault('VERSION_CODE', '1')
+def appVersionCode = rawVersionCode.isInteger() ? Math.max(1, rawVersionCode.toInteger()) : 1
 def appVersionName = envOrDefault('VERSION_NAME', '0.1.0')
 
 android {
@@ -18,6 +19,16 @@ android {
         targetSdk 35
         versionCode appVersionCode
         versionName appVersionName
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError true
+        warningsAsErrors false
     }
 
     // 固定的 debug 簽章金鑰（公開在 repo 中，說明見 keystore/README.md）。
