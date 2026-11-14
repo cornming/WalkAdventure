@@ -10,29 +10,42 @@ V0.1 是一款以 Android 實際步數驅動的輕量冒險 RPG：走路取得�
 - XP / 等級 / 地圖探索
 - 每 1000 步寶箱與金幣
 - 每 500 步隨機事件
-- SharedPreferences 本機存檔
-- 不需要 GPS、不需要登入
+- SharedPreferences 本機存檔（冒險進度與硬體計步基準分檔儲存，雲端備份還原不會洗掉新手機感測器錨點）
+- 不需要 GPS、不需要登入、支援 TalkBack 無障礙朗讀摘要與 Android 8+ 自適應圖示
+
+### 步數怎麼算
+
+手機的計步感測器回報的是「開機以來的累計步數」，App 每次讀到新的數字，就把和上一次讀數的差額加進進度。規則寫在 [`StepProgress.java`](app/src/main/java/com/cornming/walkadventure/StepProgress.java)：
+
+- **App 沒開也算**：關著 App 走的步數，下次打開時會一次補進累積步數；期間跨過的每一個 1000 步寶箱都會補發。
+- **今日步數**：每天歸零，從當天第一次讀到感測器（通常是當天第一次打開 App）之後開始算。在那之前走的步數分不出是哪一天的，只算進累積步數。
+- **重開機**：感測器會從 0 重新累計，App 會用開機次數分辨，重開機之後走的步數照樣計入，今日步數不會歸零。
+- 安裝後第一次讀到感測器時只記下起點，安裝前走的步數不算。
 
 ## 下載與安裝
 
 1. 到本 repo 的 [Releases](../../releases) 頁面，下載最新版的 `WalkAdventure-vX.Y.Z.apk`。
 2. 在 Android 手機上開啟 APK，依系統提示允許「安裝未知應用程式」。
-3. 第一次執行時允許「活動辨識」權限（計步需要）。
+3. 第一次執行時允許「活動辨識」權限（計步需要）；若曾永久拒絕權限，可點一下主畫面直接前往系統設定開啟。
 
 之後的新版 APK 使用同一把固定簽章，**可直接覆蓋安裝**，本機存檔會保留。
 
-> **舊版 APK 簽章不同，第一次換新版需先解除安裝，本機存檔會消失。**
+> **舊版 APK 簽章不同，第一次換新版需先解除安裝舊版，本機存檔會消失。**
 > 這只會發生一次；從固定簽章的版本開始，之後都可以直接覆蓋安裝。
 
 每個版本的更新內容會整理在該版 Release 說明中。
 
-## 建置
+## 建置與 CI
 
-GitHub Actions 使用 Gradle 8.10 與 Android Gradle Plugin 8.6.1 建置 APK（JDK 17）。每次推上 `main` 就會自動建置 debug APK 並發佈 GitHub Release；只改 Markdown 檔不會觸發。流程定義在 [`.github/workflows/release.yml`](.github/workflows/release.yml)。
+GitHub Actions 使用 Gradle 8.10 與 Android Gradle Plugin 8.6.1 建置 APK（JDK 17）：
+- **PR 驗證**（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）：Pull Request 會自動檢查 shell 腳本語法、執行單元測試、Android Lint 與 `assembleDebug`。
+- **自動發佈**（[`.github/workflows/release.yml`](.github/workflows/release.yml)）：推上 `main` 時計算版號，通過單元測試與 Lint 後自動建置 debug APK 並發佈 GitHub Release；若標籤已存在會直接跳過建置，只改 Markdown 檔不會觸發。
 
 本機建置（需要 JDK 17、Android SDK 與 Gradle 8.10）：
 
 ```bash
+gradle testDebugUnitTest   # 計步規則的單元測試
+gradle lintDebug           # Android Lint 檢查
 gradle assembleDebug
 ```
 
@@ -52,7 +65,7 @@ APK：`app/build/outputs/apk/debug/app-debug.apk`
 
   上一個標籤之後有多筆提交時，取最高的一項。repo 還沒有任何版本標籤時，第一版為 `0.1.0`。
 - **versionCode**：使用 GitHub Actions 的 run number，只增不減。Android 不允許用 versionCode 較低的 APK 覆蓋較高的版本，所以新版 versionCode 一定要比舊版大。
-- **Release 說明**：由 [`.github/scripts/release-notes.sh`](.github/scripts/release-notes.sh) 把上一個標籤之後的提交，依 feat／fix／其他分組整理，開頭附安裝方式與覆蓋安裝說明。
+- **Release 說明**：由 [`.github/scripts/release-notes.sh`](.github/scripts/release-notes.sh) 把上一個標籤之後的提交，依破壞性變更／feat／fix／其他分組整理，開頭附安裝方式與覆蓋安裝說明。
 
 ## 簽章
 
