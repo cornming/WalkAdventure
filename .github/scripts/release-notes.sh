@@ -46,13 +46,13 @@ for sha in $(git rev-list --no-merges "$RANGE"); do
 
   if [ -n "$bang" ] || printf '%s\n' "$body" | grep -qE '^BREAKING[ -]CHANGE'; then
     BREAKING+="- ${line}"$'\n'
+  else
+    case "$type" in
+      feat) FEATS+="- ${line}"$'\n' ;;
+      fix)  FIXES+="- ${line}"$'\n' ;;
+      *)    OTHERS+="- ${line}"$'\n' ;;
+    esac
   fi
-
-  case "$type" in
-    feat) FEATS+="- ${line}"$'\n' ;;
-    fix)  FIXES+="- ${line}"$'\n' ;;
-    *)    OTHERS+="- ${line}"$'\n' ;;
-  esac
 done
 
 cat <<EOF

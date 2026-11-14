@@ -59,6 +59,7 @@ final class StepProgress {
      */
     Update onSensorReading(long sensorSteps, String today, long bootCount, Random random) {
         Update update = new Update();
+        if (sensorSteps < 0 || today == null || random == null) return update;
 
         // 換日：今日步數歸零，從換日後的第一次讀數開始算。
         // 這一次的差額跨了兩天、分不出各走了多少，所以只算進累積步數。
@@ -104,6 +105,26 @@ final class StepProgress {
         return update;
     }
 
+    /**
+     * 將同一次讀數觸發的寶箱與隨機事件合併為單一提示，避免事件訊息立刻蓋掉寶箱獎勵。
+     */
+    static String buildAnnouncement(Update update, String eventMessage) {
+        if (update == null) return null;
+        String chestText = null;
+        if (update.chests > 0) {
+            chestText = update.chests == 1
+                ? "🎁 寶箱！獲得 " + update.chestCoins + " 金幣"
+                : "🎁 寶箱 ×" + update.chests + "！獲得 " + update.chestCoins + " 金幣";
+        }
+        String eventText = (update.event && eventMessage != null && !eventMessage.isEmpty())
+            ? eventMessage
+            : null;
+        if (chestText != null && eventText != null) {
+            return chestText + "\n" + eventText;
+        }
+        return chestText != null ? chestText : eventText;
+    }
+
     private boolean rebooted(long bootCount) {
         return bootCount >= 0 && lastBootCount >= 0 && bootCount != lastBootCount;
     }
@@ -113,18 +134,18 @@ final class StepProgress {
      * 升級後第一次啟動時，用舊資料換算出今天已經走的步數，換日或資料不完整就從 0 開始。
      */
     static long todayStepsFromLegacy(String savedDay, String today, float baseline, long lastSensorSteps) {
-        if (savedDay == null || !savedDay.equals(today)) return 0;
+        if (savedDay == null || today == null || !savedDay.equals(today)) return 0;
         if (baseline < 0 || lastSensorSteps < baseline) return 0;
         return (long) (lastSensorSteps - baseline);
     }
 
     /** 畫面上要顯示的今日步數：存檔是前幾天留下的（換日後還沒有新讀數）就顯示 0。 */
     long todayStepsOn(String today) {
-        return today.equals(day) ? todaySteps : 0;
+        return today != null && today.equals(day) ? todaySteps : 0;
     }
 
     int level() {
-        return (int) (lifetime / STEPS_PER_CHEST) + 1;
+        return (int) Math.min(Integer.MAX_VALUE, (lifetime / STEPS_PER_CHEST) + 1);
     }
 
     /** 目前等級內的經驗值（0 到 999）。 */

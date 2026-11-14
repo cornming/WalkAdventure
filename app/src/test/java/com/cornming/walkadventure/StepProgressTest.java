@@ -2,6 +2,7 @@ package com.cornming.walkadventure;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.util.Random;
@@ -181,5 +182,37 @@ public class StepProgressTest {
         assertEquals("沒有存過日期", 0, StepProgress.todayStepsFromLegacy(null, MON, 2_000f, 3_500));
         assertEquals("沒有基準值", 0, StepProgress.todayStepsFromLegacy(MON, MON, -1f, 3_500));
         assertEquals("沒有讀過感測器", 0, StepProgress.todayStepsFromLegacy(MON, MON, 2_000f, StepProgress.UNKNOWN));
+    }
+
+    @Test public void announcementKeepsChestWhenEventAlsoFires() {
+        StepProgress p = started(0);
+        StepProgress.Update u = p.onSensorReading(1_000, MON, BOOT, FIXED);
+        assertEquals(1, u.chests);
+        assertTrue(u.event);
+
+        String combined = StepProgress.buildAnnouncement(u, "✨ 神秘光芒照亮前方道路");
+        assertTrue(combined.contains("🎁 寶箱！獲得 30 金幣"));
+        assertTrue(combined.contains("✨ 神秘光芒照亮前方道路"));
+        assertTrue(combined.indexOf("寶箱") < combined.indexOf("神秘光芒"));
+
+        StepProgress.Update onlyEvent = new StepProgress.Update();
+        onlyEvent.event = true;
+        assertEquals("🍀 撿到幸運道具！", StepProgress.buildAnnouncement(onlyEvent, "🍀 撿到幸運道具！"));
+
+        StepProgress.Update multiChest = new StepProgress.Update();
+        multiChest.chests = 3;
+        multiChest.chestCoins = 95;
+        assertEquals("🎁 寶箱 ×3！獲得 95 金幣", StepProgress.buildAnnouncement(multiChest, null));
+        assertNull(StepProgress.buildAnnouncement(new StepProgress.Update(), "unused"));
+    }
+
+    @Test public void guardsNegativeReadingsNullDayAndExtremeLevels() {
+        StepProgress p = started(500);
+        assertFalse(p.onSensorReading(-10, MON, BOOT, FIXED).changed());
+        assertFalse(p.onSensorReading(700, null, BOOT, FIXED).changed());
+        assertEquals(0, p.todayStepsOn(null));
+
+        p.lifetime = Long.MAX_VALUE;
+        assertEquals(Integer.MAX_VALUE, p.level());
     }
 }

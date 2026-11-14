@@ -44,7 +44,7 @@ fi
 LEVEL=patch
 # 正規表示式放進變數，避免 [[ =~ ]] 對括號的解析問題
 BANG_RE='^[A-Za-z]+(\([^)]*\))?!:[[:space:]]'
-FEAT_RE='^feat(\([^)]*\))?:[[:space:]]'
+FEAT_RE='^[Ff][Ee][Aa][Tt](\([^)]*\))?:[[:space:]]'
 
 for sha in $COMMITS; do
   subject="$(git log -1 --format=%s "$sha")"
