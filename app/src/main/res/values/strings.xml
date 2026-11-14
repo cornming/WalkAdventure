@@ -1,1 +1,23 @@
-<resources><string name="app_name">走走冒險</string></resources>
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">走走冒險</string>
+    <string name="version_label">v%1$s</string>
+    <string name="update_check">檢查更新</string>
+    <string name="update_checking">檢查中…</string>
+    <string name="update_downloading">下載新版中…</string>
+    <string name="update_ready_button">安裝新版 v%1$s</string>
+    <string name="update_up_to_date">目前已是最新版 v%1$s</string>
+    <string name="update_check_failed">目前無法取得更新資訊，請稍後再試</string>
+    <string name="update_rate_limited">檢查更新過於頻繁，請稍後再試</string>
+    <string name="update_download_failed">新版下載或驗證失敗，請稍後再試或改由 Releases 下載</string>
+    <string name="update_dialog_title">發現新版本 v%1$s</string>
+    <string name="update_dialog_message">新版 APK 已自動下載並通過完整性驗證（目前版本 v%1$s）。可直接覆蓋安裝，原本的步數、金幣與冒險進度都會保留。</string>
+    <string name="update_install_now">立即安裝</string>
+    <string name="update_view_release">查看說明</string>
+    <string name="update_later">稍後再說</string>
+    <string name="update_permission_title">需要允許安裝更新</string>
+    <string name="update_permission_message">請先在系統設定開啟「允許來自此來源的應用程式」，完成後返回即可自動繼續安裝新版。</string>
+    <string name="update_open_settings">前往設定</string>
+    <string name="update_cancel">取消</string>
+    <string name="update_installer_unavailable">無法啟動系統安裝程式，已為您改開版本頁面</string>
+</resources>

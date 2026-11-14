@@ -1,6 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission
+        android:name="android.permission.REQUEST_INSTALL_PACKAGES"
+        tools:ignore="RequestInstallPackagesPolicy" />
     <uses-feature android:name="android.hardware.sensor.stepcounter" android:required="false" />
     <application
         android:icon="@mipmap/ic_launcher"
@@ -12,6 +16,11 @@
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:supportsRtl="true"
         tools:targetApi="s">
+        <provider
+            android:name=".ApkFileProvider"
+            android:authorities="${applicationId}.apkprovider"
+            android:exported="false"
+            android:grantUriPermissions="true" />
         <activity
             android:name=".MainActivity"
             android:screenOrientation="portrait"
