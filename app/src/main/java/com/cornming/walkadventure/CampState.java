@@ -125,7 +125,7 @@ final class CampState {
         new BuildingDef(BLD_GARDEN, "garden", "奇幻小菜園", "解鎖更多花圃並加速走路澆水成長", 110, 85, 6),
         new BuildingDef(BLD_PLAYGROUND, "playground", "旅伴樂園", "蓋滑梯與樹屋，每日摸摸旅伴羈絆提升", 140, 100, 8),
         new BuildingDef(BLD_OBSERVATORY, "observatory", "星光觀景台", "提高稀有神祕蛋與閃亮異色機率", 160, 110, 10),
-        new BuildingDef(BLD_GALLERY, "gallery", "回憶畫廊小屋", "展示繪本故事與親子紀錄（預留明信片牆）", 130, 95, 8),
+        new BuildingDef(BLD_GALLERY, "gallery", "回憶畫廊小屋", "展示繪本故事與實境冒險明信片回憶牆", 130, 95, 8),
         new BuildingDef(BLD_WORKSHOP, "workshop", "探險工坊", "種子與點心打折並解鎖旅伴可愛飾品", 150, 100, 9)
     };
 

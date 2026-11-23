@@ -1,5 +1,7 @@
 package com.cornming.walkadventure;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -15,6 +17,7 @@ final class StoryCatalog {
     static final int BOSS_REQUIRED_STEPS = 2000;
     static final int SEASON_STAMP_COUNT = 8;
     static final int MAX_RECENT_NOTES = 40;
+    static final int MAX_MEMORIES = 80;
 
     static final String AGE_ALL = "ALL";
     static final String AGE_PRESCHOOL = "PRESCHOOL";     // 學齡前～低年級
@@ -147,7 +150,7 @@ final class StoryCatalog {
         }
     }
 
-    /** Phase 2 相機尋寶與明信片預留紀錄模型（Phase 1 保留欄位與 JSON 陣列以確保無縫升級） */
+    /** Phase 2 實境相機尋寶與冒險明信片紀錄模型（含照片、塗鴉圖層、語音便條與當日旅伴快照） */
     static final class MemoryEntry {
         final String id;
         final String date;
@@ -155,8 +158,17 @@ final class StoryCatalog {
         final String squadLabel;
         final String photoPath;
         final String audioPath;
+        final String doodlePath;
+        final String note;
+        final int huntId;
+        final String colorName;
         final int dominantHue;
         final int stars;
+        final long stepsOnDay;
+        final int companionId;
+        final int companionStage;
+        final boolean companionShiny;
+        final int season;
 
         MemoryEntry(
             String id,
@@ -168,14 +180,45 @@ final class StoryCatalog {
             int dominantHue,
             int stars
         ) {
+            this(id, date, title, squadLabel, photoPath, audioPath, "", "", 0, "", dominantHue, stars, 0L, 0, 1, false, 0);
+        }
+
+        MemoryEntry(
+            String id,
+            String date,
+            String title,
+            String squadLabel,
+            String photoPath,
+            String audioPath,
+            String doodlePath,
+            String note,
+            int huntId,
+            String colorName,
+            int dominantHue,
+            int stars,
+            long stepsOnDay,
+            int companionId,
+            int companionStage,
+            boolean companionShiny,
+            int season
+        ) {
             this.id = id != null ? id : "";
             this.date = date != null ? date : "";
             this.title = title != null ? title : "";
             this.squadLabel = squadLabel != null ? squadLabel : "";
             this.photoPath = photoPath != null ? photoPath : "";
             this.audioPath = audioPath != null ? audioPath : "";
+            this.doodlePath = doodlePath != null ? doodlePath : "";
+            this.note = note != null ? note : "";
+            this.huntId = huntId;
+            this.colorName = colorName != null ? colorName : "";
             this.dominantHue = dominantHue;
-            this.stars = Math.max(0, Math.min(3, stars));
+            this.stars = Math.max(1, Math.min(3, stars <= 0 ? 1 : stars));
+            this.stepsOnDay = Math.max(0L, stepsOnDay);
+            this.companionId = Math.max(0, companionId);
+            this.companionStage = Math.max(1, Math.min(3, companionStage));
+            this.companionShiny = companionShiny;
+            this.season = Math.max(0, Math.min(3, season));
         }
     }
 
@@ -575,6 +618,67 @@ final class StoryCatalog {
         ));
         while (recentNotes.size() > MAX_RECENT_NOTES) {
             recentNotes.remove(recentNotes.size() - 1);
+        }
+    }
+
+    /** 新增一張實境冒險明信片；若超過上限 MAX_MEMORIES，回傳被移除的最舊明信片供清理媒體檔。 */
+    MemoryEntry addMemory(MemoryEntry entry) {
+        if (entry == null) return null;
+        memories.add(0, entry);
+        if (memories.size() > MAX_MEMORIES) {
+            return memories.remove(memories.size() - 1);
+        }
+        return null;
+    }
+
+    MemoryEntry removeMemoryById(String id) {
+        if (id == null) return null;
+        for (int i = 0; i < memories.size(); i++) {
+            if (id.equals(memories.get(i).id)) {
+                return memories.remove(i);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 回憶時光機：優先找出「去年的今天（±3 天）」跨年紀念明信片；若無則找出 7 天以上的過往珍藏回憶。
+     */
+    List<MemoryEntry> findThrowbackMemories(String todayIso) {
+        List<MemoryEntry> onThisDay = new ArrayList<>();
+        List<MemoryEntry> olderFlashbacks = new ArrayList<>();
+        LocalDate todayDate = parseIsoSafe(todayIso);
+        if (todayDate == null) return Collections.emptyList();
+
+        for (MemoryEntry m : memories) {
+            LocalDate md = parseIsoSafe(m.date);
+            if (md == null) continue;
+            if (md.getYear() < todayDate.getYear()) {
+                int dayDiff = Math.abs(md.getDayOfYear() - todayDate.getDayOfYear());
+                if (dayDiff <= 3 || dayDiff >= 362) {
+                    onThisDay.add(m);
+                    continue;
+                }
+            }
+            if (!md.isAfter(todayDate.minusDays(7))) {
+                olderFlashbacks.add(m);
+            }
+        }
+        if (!onThisDay.isEmpty()) {
+            return Collections.unmodifiableList(onThisDay);
+        }
+        if (!olderFlashbacks.isEmpty()) {
+            return Collections.unmodifiableList(olderFlashbacks.subList(0, Math.min(2, olderFlashbacks.size())));
+        }
+        return Collections.emptyList();
+    }
+
+    private static LocalDate parseIsoSafe(String raw) {
+        if (raw == null || raw.trim().isEmpty()) return null;
+        try {
+            return LocalDate.parse(raw.trim());
+        } catch (DateTimeParseException ignored) {
+            return null;
         }
     }
 }

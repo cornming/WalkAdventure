@@ -123,6 +123,12 @@ final class SaveCodec {
         root.put("gardenHarvestCount", (long) state.gardenHarvestCount);
         root.put("lastBirthdayGiftDate", nonNull(state.lastBirthdayGiftDate));
         root.put("lastPenguinSnackDate", nonNull(state.lastPenguinSnackDate));
+        root.put("rainbowCollectedMask", (long) state.rainbowCollectedMask);
+        root.put("rainbowCompletedSets", (long) state.rainbowCompletedSets);
+        root.put("photoHuntsCompleted", (long) state.photoHuntsCompleted);
+        root.put("voiceMemoriesCount", (long) state.voiceMemoriesCount);
+        root.put("onboardingCompleted", state.guide.onboardingCompleted);
+        root.put("seenTipsMask", (long) state.guide.seenTipsMask);
 
         // family
         Map<String, Object> fam = new LinkedHashMap<>();
@@ -253,7 +259,7 @@ final class SaveCodec {
         spObj.put("stampsMask", (long) state.stories.seasonStampsMask);
         root.put("seasonPassport", spObj);
 
-        // Phase 2 memories slot
+        // Phase 2 memories
         List<Object> memList = new ArrayList<>();
         for (StoryCatalog.MemoryEntry mem : state.stories.memories) {
             Map<String, Object> mo = new LinkedHashMap<>();
@@ -263,8 +269,17 @@ final class SaveCodec {
             mo.put("squadLabel", nonNull(mem.squadLabel));
             mo.put("photoPath", nonNull(mem.photoPath));
             mo.put("audioPath", nonNull(mem.audioPath));
+            mo.put("doodlePath", nonNull(mem.doodlePath));
+            mo.put("note", nonNull(mem.note));
+            mo.put("huntId", (long) mem.huntId);
+            mo.put("colorName", nonNull(mem.colorName));
             mo.put("dominantHue", (long) mem.dominantHue);
             mo.put("stars", (long) mem.stars);
+            mo.put("stepsOnDay", mem.stepsOnDay);
+            mo.put("companionId", (long) mem.companionId);
+            mo.put("companionStage", (long) mem.companionStage);
+            mo.put("companionShiny", mem.companionShiny);
+            mo.put("season", (long) mem.season);
             memList.add(mo);
         }
         root.put("memories", memList);
@@ -301,6 +316,12 @@ final class SaveCodec {
         state.gardenHarvestCount = Math.max(0, asInt(root.get("gardenHarvestCount"), 0));
         state.lastBirthdayGiftDate = asString(root.get("lastBirthdayGiftDate"), "");
         state.lastPenguinSnackDate = asString(root.get("lastPenguinSnackDate"), "");
+        state.rainbowCollectedMask = asInt(root.get("rainbowCollectedMask"), 0);
+        state.rainbowCompletedSets = Math.max(0, asInt(root.get("rainbowCompletedSets"), 0));
+        state.photoHuntsCompleted = Math.max(0, asInt(root.get("photoHuntsCompleted"), 0));
+        state.voiceMemoriesCount = Math.max(0, asInt(root.get("voiceMemoriesCount"), 0));
+        state.guide.onboardingCompleted = asBool(root.get("onboardingCompleted"), false);
+        state.guide.seenTipsMask = asInt(root.get("seenTipsMask"), 0);
 
         // family
         Map<String, Object> fam = asMap(root.get("family"));
@@ -503,8 +524,17 @@ final class SaveCodec {
                     asString(mo.get("squadLabel"), ""),
                     asString(mo.get("photoPath"), ""),
                     asString(mo.get("audioPath"), ""),
+                    asString(mo.get("doodlePath"), ""),
+                    asString(mo.get("note"), ""),
+                    asInt(mo.get("huntId"), 0),
+                    asString(mo.get("colorName"), ""),
                     asInt(mo.get("dominantHue"), -1),
-                    asInt(mo.get("stars"), 0)
+                    asInt(mo.get("stars"), 1),
+                    asLong(mo.get("stepsOnDay"), 0L),
+                    asInt(mo.get("companionId"), 0),
+                    asInt(mo.get("companionStage"), 1),
+                    asBool(mo.get("companionShiny"), false),
+                    asInt(mo.get("season"), 0)
                 ));
             }
         }

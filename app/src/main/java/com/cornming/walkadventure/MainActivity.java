@@ -20,6 +20,7 @@ import android.hardware.SensorManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.provider.MediaStore;
 import android.provider.Settings;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -90,6 +91,12 @@ public class MainActivity extends Activity implements SensorEventListener {
     private static final String KEY_CACHED_APK_SHA256 = "update_cached_apk_sha256";
     private static final String KEY_DOWNLOADED_TAG = "update_downloaded_tag";
     private static final String KEY_DISMISSED_TAG = "update_dismissed_tag";
+    private static final String KEY_PENDING_HUNT_ID = "phase2_pending_hunt_id";
+    private static final String KEY_PENDING_MEMORY_ID = "phase2_pending_memory_id";
+
+    private static final int REQ_AUDIO = 21;
+    private static final int REQ_CAMERA_CAPTURE = 30;
+    private static final int REQ_PICK_PHOTO = 31;
 
     private static final int TAB_ADVENTURE = 0;
     private static final int TAB_CAMP = 1;
@@ -107,6 +114,11 @@ public class MainActivity extends Activity implements SensorEventListener {
     private SharedPreferences devicePrefs;
     private StepProgress progress;
     private AdventureState adventure;
+    private MemoryMediaStore mediaStore;
+    private PostcardWorkshopController workshopController;
+    private int pendingHuntId = -1;
+    private String pendingMemoryId = "";
+    private Runnable pendingAudioPermissionCallback;
     private Toast activeToast;
     private AlertDialog activeDialog;
     private final Random random = new Random();
@@ -117,14 +129,16 @@ public class MainActivity extends Activity implements SensorEventListener {
     private boolean pendingInstallAfterSettings = false;
 
     private int activeTab = TAB_ADVENTURE;
-    private String lastNoticeText = "準備出發！平日累積進營火盒，假日一起開箱、孵蛋與探索！";
+    private String lastNoticeText = "準備出發！平日累積進營火盒，假日一起開箱、孵蛋與相機尋寶！";
 
     // 頂部模式與口袋防低頭遮罩
     private Button modeToggleBtn;
     private Button pocketBtn;
+    private Button helpBtn;
     private TextView topCurrencyText;
     private LinearLayout pocketOverlay;
     private TextView pocketStepsLabel;
+    private CelebrationOverlayView celebrationOverlay;
 
     // 4 分頁容器與控制器
     private ScrollView adventureScroll;
@@ -137,15 +151,21 @@ public class MainActivity extends Activity implements SensorEventListener {
     private CampTabController campController;
     private JournalTabController journalController;
     private SquadTabController squadController;
+    private GuideDialogController guideController;
 
     // 探險分頁動態區塊
     private AdventureCanvasView adventureCanvas;
+    private LinearLayout adventureTipSlot;
     private LinearLayout biomeNavRow;
     private TextView biomeNavLabel;
     private Button biomePrevButton;
     private Button biomeNextButton;
     private LinearLayout vaultBannerCard;
     private TextView vaultBannerTitle;
+    private LinearLayout cameraHuntCard;
+    private TextView cameraHuntTitle;
+    private TextView cameraHuntBody;
+    private Button cameraRecommendedBtn;
     private LinearLayout bossCard;
     private TextView bossTitle;
     private TextView bossBody;
@@ -200,6 +220,8 @@ public class MainActivity extends Activity implements SensorEventListener {
 
         if (migration.migrated && migration.wasVeteran) {
             showMigrationWelcomeDialog(migration.welcomeMessage);
+        } else if (adventure.guide.shouldShowOnboarding()) {
+            guideController.showOnboardingDialog(adventure);
         }
 
         if (stepSensor != null && !hasStepPermission() && !devicePrefs.getBoolean(KEY_PERMISSION_REQUESTED, false)) {
@@ -214,9 +236,73 @@ public class MainActivity extends Activity implements SensorEventListener {
     }
 
     private void initControllers() {
+        mediaStore = new MemoryMediaStore(this);
+        guideController = new GuideDialogController(this, new GuideDialogController.Host() {
+            @Override public void onOnboardingFinished(boolean jumpToSquad) {
+                saveProgress();
+                refreshAllTabs();
+                triggerCelebration(
+                    CelebrationOverlayView.STYLE_HARVEST,
+                    "🎉 準備好一起冒險囉！",
+                    "隨時可點右上角「❓」重看說明與導覽"
+                );
+                if (jumpToSquad) {
+                    switchTab(TAB_SQUAD);
+                }
+            }
+
+            @Override public void onJumpToTab(int tabIndex) {
+                switchTab(tabIndex);
+            }
+        });
+
+        workshopController = new PostcardWorkshopController(this, new PostcardWorkshopController.Host() {
+            @Override public void onLaunchSystemCamera(int huntId) {
+                launchSystemCamera(huntId);
+            }
+
+            @Override public void onLaunchPhotoPicker(int huntId) {
+                launchPhotoPicker(huntId);
+            }
+
+            @Override public boolean hasRecordAudioPermission() {
+                return MainActivity.this.hasRecordAudioPermission();
+            }
+
+            @Override public void onRequestRecordAudioPermission(Runnable onGranted) {
+                requestRecordAudioPermission(onGranted);
+            }
+
+            @Override public void onStateChanged(String toastMessage) {
+                commitAndRefresh(toastMessage);
+                if (toastMessage != null && toastMessage.startsWith("📮")) {
+                    if (toastMessage.contains("彩虹七色")) {
+                        triggerCelebration(
+                            CelebrationOverlayView.STYLE_EVOLVE,
+                            "🌈 彩虹七色全制霸！",
+                            "獲得花瓣奇蹟神祕蛋與豐厚獎勵！"
+                        );
+                    } else {
+                        triggerCelebration(
+                            CelebrationOverlayView.STYLE_HARVEST,
+                            "📮 冒險明信片誕生！",
+                            "已珍藏進繪本手札，隨時回味與分享"
+                        );
+                    }
+                }
+            }
+        }, mediaStore);
+
         campController = new CampTabController(this, new CampTabController.Host() {
             @Override public void onStateChanged(String toastMessage) {
                 commitAndRefresh(toastMessage);
+                if (toastMessage != null) {
+                    if (toastMessage.contains("進化")) {
+                        triggerCelebration(CelebrationOverlayView.STYLE_EVOLVE, "✨ 旅伴華麗進化！", toastMessage);
+                    } else if (toastMessage.contains("落成") || toastMessage.contains("升級") || toastMessage.contains("升至")) {
+                        triggerCelebration(CelebrationOverlayView.STYLE_EVOLVE, "⛺ 營地設施升級！", toastMessage);
+                    }
+                }
             }
 
             @Override public void onOpenCampfireDialog() {
@@ -226,11 +312,21 @@ public class MainActivity extends Activity implements SensorEventListener {
             @Override public void onHatchEggRequested(int eggListIndex) {
                 CompanionSystem.HatchResult res = adventure.hatchEgg(progress, eggListIndex, WorldClock.now().isoDate, random);
                 commitAndRefresh(res.message);
+                if (res.ok) {
+                    triggerCelebration(
+                        CelebrationOverlayView.STYLE_HATCH,
+                        res.isShiny ? "✨ 閃亮異色破殼！" : "🐣 新旅伴誕生！",
+                        res.message
+                    );
+                }
             }
 
             @Override public void onHarvestGardenRequested(int slot) {
                 CampState.HarvestResult res = adventure.harvestGardenPlot(progress, slot, WorldClock.now().isoDate, random);
                 commitAndRefresh(res.message);
+                if (res.ok) {
+                    triggerCelebration(CelebrationOverlayView.STYLE_HARVEST, "🌻 奇幻菜園大豐收！", res.message);
+                }
             }
 
             @Override public void onCompanionPetted(int companionId) {
@@ -239,7 +335,23 @@ public class MainActivity extends Activity implements SensorEventListener {
             }
         });
 
-        journalController = new JournalTabController(this, this::commitAndRefresh);
+        journalController = new JournalTabController(this, new JournalTabController.Host() {
+            @Override public void onStateChanged(String toastMessage) {
+                commitAndRefresh(toastMessage);
+            }
+
+            @Override public void onStartPhotoHunt(int huntId) {
+                workshopController.showCaptureSourceDialog(huntId);
+            }
+
+            @Override public void onOpenHuntPicker() {
+                workshopController.showHuntPickerDialog(adventure);
+            }
+
+            @Override public void onViewPostcard(StoryCatalog.MemoryEntry entry) {
+                workshopController.showPostcardViewerDialog(entry, adventure);
+            }
+        }, mediaStore);
 
         squadController = new SquadTabController(this, new SquadTabController.Host() {
             @Override public void onStateChanged(String toastMessage) {
@@ -269,6 +381,12 @@ public class MainActivity extends Activity implements SensorEventListener {
         }
         saveProgress();
         refreshAllTabs();
+    }
+
+    private void triggerCelebration(int style, String title, String subtitle) {
+        if (celebrationOverlay != null) {
+            celebrationOverlay.triggerCelebration(style, title, subtitle);
+        }
     }
 
     private void buildLayout() {
@@ -373,26 +491,41 @@ public class MainActivity extends Activity implements SensorEventListener {
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         ));
 
+        // 穿透式全螢幕慶祝動畫覆蓋層（不攔截任何觸控）
+        celebrationOverlay = new CelebrationOverlayView(this);
+        frame.addView(celebrationOverlay, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+
         setContentView(frame);
         renderUpdateButton(UPDATE_STATE_IDLE);
-        switchTab(TAB_ADVENTURE);
+        switchTab(TAB_ADVENTURE, false);
     }
 
     private LinearLayout buildTopModeBar() {
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setPadding(UiKit.dp(this, 12), UiKit.dp(this, 6), UiKit.dp(this, 12), UiKit.dp(this, 6));
+        bar.setPadding(UiKit.dp(this, 10), UiKit.dp(this, 6), UiKit.dp(this, 10), UiKit.dp(this, 6));
         bar.setBackgroundColor(Color.rgb(252, 240, 218));
 
         modeToggleBtn = UiKit.makeSmallPillButton(this, "☀️ 平日模式", UiKit.COLOR_WARM_BTN, getColor(R.color.ink));
         modeToggleBtn.setOnClickListener(v -> {
+            UiKit.animatePopBounce(this, modeToggleBtn);
             adventure.family.toggleMode();
             adventure.evaluateExtraAchievements(progress, WorldClock.now().isoDate);
-            String msg = adventure.family.isFamilyMode()
+            boolean fam = adventure.family.isFamilyMode();
+            String msg = fam
                 ? "🎈 已切換「親子出任務模式」！營火開箱享額外加成，快看今日抬頭任務！"
                 : "☀️ 已切換「平日累積模式」，寶箱可自動存進營火盒留給晚上！";
             commitAndRefresh(msg);
+            if (fam) {
+                triggerCelebration(
+                    CelebrationOverlayView.STYLE_HARVEST,
+                    "🎈 親子出任務啟動！",
+                    "營火開箱享加成，全家一起看世界！"
+                );
+            }
         });
         bar.addView(modeToggleBtn);
 
@@ -400,20 +533,36 @@ public class MainActivity extends Activity implements SensorEventListener {
         LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        pLp.setMargins(UiKit.dp(this, 6), 0, UiKit.dp(this, 6), 0);
+        pLp.setMargins(UiKit.dp(this, 5), 0, UiKit.dp(this, 5), 0);
         pocketBtn.setOnClickListener(v -> {
+            UiKit.animatePopBounce(this, pocketBtn);
             adventure.family.startPocketMode();
             saveProgress();
             refreshPocketOverlay();
+            UiKit.animateFadeSlideIn(this, pocketOverlay);
         });
         bar.addView(pocketBtn, pLp);
 
         topCurrencyText = new TextView(this);
         topCurrencyText.setGravity(Gravity.END);
-        topCurrencyText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        topCurrencyText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
         topCurrencyText.setTypeface(Typeface.create("sans", Typeface.BOLD));
         topCurrencyText.setTextColor(getColor(R.color.ink));
         bar.addView(topCurrencyText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        helpBtn = UiKit.makeSmallPillButton(this, "❓", UiKit.COLOR_CARD_BG, getColor(R.color.ink));
+        helpBtn.setContentDescription("開啟走走冒險 2.0 說明指南與新手導覽");
+        helpBtn.setMinWidth(UiKit.dp(this, 40));
+        helpBtn.setPadding(UiKit.dp(this, 9), UiKit.dp(this, 5), UiKit.dp(this, 9), UiKit.dp(this, 5));
+        LinearLayout.LayoutParams hLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        hLp.setMargins(UiKit.dp(this, 5), 0, 0, 0);
+        helpBtn.setOnClickListener(v -> {
+            UiKit.animatePopBounce(this, helpBtn);
+            guideController.showHelpManualDialog(adventure);
+        });
+        bar.addView(helpBtn, hLp);
         return bar;
     }
 
@@ -463,6 +612,13 @@ public class MainActivity extends Activity implements SensorEventListener {
                 ? String.format(Locale.TAIWAN, "🎉 剛剛口袋散步一共累積 %d 步！看看收穫吧！", walked)
                 : "已結束口袋探險模式";
             commitAndRefresh(msg);
+            if (walked > 0) {
+                triggerCelebration(
+                    CelebrationOverlayView.STYLE_HARVEST,
+                    "🎒 口袋散步大收穫！",
+                    String.format(Locale.TAIWAN, "剛才安心散步累積了 %d 步！", walked)
+                );
+            }
         });
         overlay.addView(exitBtn, UiKit.matchWrap());
         overlay.setVisibility(View.GONE);
@@ -481,6 +637,13 @@ public class MainActivity extends Activity implements SensorEventListener {
             if (!hasStepPermission()) handlePermissionTap();
         });
         col.addView(adventureCanvas, UiKit.matchWrap());
+
+        // 探險分頁首次造訪情境提示卡插槽
+        adventureTipSlot = new LinearLayout(this);
+        adventureTipSlot.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams tipSlotLp = UiKit.matchWrap();
+        tipSlotLp.setMargins(UiKit.dp(this, 16), UiKit.dp(this, 4), UiKit.dp(this, 16), 0);
+        col.addView(adventureTipSlot, tipSlotLp);
 
         // 區域切換列
         biomeNavRow = new LinearLayout(this);
@@ -523,6 +686,20 @@ public class MainActivity extends Activity implements SensorEventListener {
         hCardLp.setMargins(UiKit.dp(this, 16), UiKit.dp(this, 4), UiKit.dp(this, 16), UiKit.dp(this, 6));
         col.addView(vaultBannerCard, hCardLp);
 
+        // Phase 2 實境相機尋寶快捷卡
+        cameraHuntCard = UiKit.makeSectionCard(this, Color.rgb(235, 246, 255));
+        cameraHuntTitle = UiKit.addCardTitle(this, cameraHuntCard, "");
+        cameraHuntBody = UiKit.addCardSubtitle(this, cameraHuntCard, "");
+        cameraRecommendedBtn = UiKit.makeActionButton(this, UiKit.COLOR_PRIMARY, UiKit.COLOR_PRIMARY_TEXT);
+        Button pickAllHuntsBtn = UiKit.makeActionButton(this, UiKit.COLOR_WARM_BTN, getColor(R.color.ink));
+        pickAllHuntsBtn.setText("🌈 全部 12 題");
+        pickAllHuntsBtn.setOnClickListener(v -> workshopController.showHuntPickerDialog(adventure));
+        LinearLayout camRow = UiKit.makeButtonRow(this, cameraRecommendedBtn, pickAllHuntsBtn);
+        LinearLayout.LayoutParams camLp = UiKit.matchWrap();
+        camLp.setMargins(0, UiKit.dp(this, 8), 0, 0);
+        cameraHuntCard.addView(camRow, camLp);
+        col.addView(cameraHuntCard, new LinearLayout.LayoutParams(hCardLp));
+
         // 島嶼守護巨獸試煉卡
         bossCard = UiKit.makeSectionCard(this, Color.rgb(240, 236, 255));
         bossTitle = UiKit.addCardTitle(this, bossCard, "");
@@ -532,6 +709,9 @@ public class MainActivity extends Activity implements SensorEventListener {
             int biomeIdx = adventure.frontierBiomeIndex(progress);
             AdventureState.ActionResult r = adventure.calmIslandBoss(progress, biomeIdx, WorldClock.now().isoDate);
             commitAndRefresh(r.message);
+            if (r.ok) {
+                triggerCelebration(CelebrationOverlayView.STYLE_EVOLVE, "🐲 守護巨獸安撫成功！", r.message);
+            }
         });
         LinearLayout.LayoutParams bBtnLp = UiKit.matchWrap();
         bBtnLp.setMargins(0, UiKit.dp(this, 6), 0, 0);
@@ -597,12 +777,24 @@ public class MainActivity extends Activity implements SensorEventListener {
     }
 
     private void switchTab(int target) {
+        switchTab(target, target != activeTab);
+    }
+
+    private void switchTab(int target, boolean animate) {
         activeTab = target;
         adventureScroll.setVisibility(target == TAB_ADVENTURE ? View.VISIBLE : View.GONE);
         campScroll.setVisibility(target == TAB_CAMP ? View.VISIBLE : View.GONE);
         journalScroll.setVisibility(target == TAB_JOURNAL ? View.VISIBLE : View.GONE);
         squadScroll.setVisibility(target == TAB_SQUAD ? View.VISIBLE : View.GONE);
         refreshAllTabs();
+        if (animate) {
+            View activeScroll = target == TAB_ADVENTURE ? adventureScroll
+                : (target == TAB_CAMP ? campScroll : (target == TAB_JOURNAL ? journalScroll : squadScroll));
+            Button activeBtn = target == TAB_ADVENTURE ? tabBtnAdventure
+                : (target == TAB_CAMP ? tabBtnCamp : (target == TAB_JOURNAL ? tabBtnJournal : tabBtnSquad));
+            UiKit.animateFadeSlideIn(this, activeScroll);
+            UiKit.animatePopBounce(this, activeBtn);
+        }
         if (target == TAB_ADVENTURE) {
             adventureCanvas.startIdleAnimation();
             campController.stopAnimation();
@@ -692,6 +884,19 @@ public class MainActivity extends Activity implements SensorEventListener {
         String todayStr = clock.isoDate;
         adventureCanvas.bind(progress, adventure, clock, statusText(), stepSensor == null || !hasStepPermission());
 
+        if (adventure.guide.shouldShowTabTip(GuideState.TIP_ADVENTURE)) {
+            if (adventureTipSlot.getChildCount() == 0) {
+                adventureTipSlot.addView(GuideDialogController.buildContextualTipCard(this, GuideState.TIP_ADVENTURE, () -> {
+                    adventure.guide.dismissTabTip(GuideState.TIP_ADVENTURE);
+                    commitAndRefresh(null);
+                }), UiKit.cardMargins(this));
+            }
+            adventureTipSlot.setVisibility(View.VISIBLE);
+        } else {
+            adventureTipSlot.removeAllViews();
+            adventureTipSlot.setVisibility(View.GONE);
+        }
+
         int maxUnlocked = adventure.highestUnlockedBiomeIndex(progress);
         if (maxUnlocked > 0) {
             biomeNavRow.setVisibility(View.VISIBLE);
@@ -718,6 +923,23 @@ public class MainActivity extends Activity implements SensorEventListener {
         } else {
             vaultBannerCard.setVisibility(View.GONE);
         }
+
+        // 相機尋寶推薦卡
+        ColorScavenger.HuntDef recHunt = ColorScavenger.recommendedHunt(
+            adventure.rainbowCollectedMask,
+            clock.dayOfMonth + adventure.photoHuntsCompleted
+        );
+        cameraHuntTitle.setText(String.format(
+            Locale.TAIWAN,
+            "📸 實境相機尋寶（彩虹 %d/%d · 明信片 %d 張）",
+            adventure.rainbowCollectedCount(),
+            ColorScavenger.RAINBOW_COUNT,
+            adventure.stories.memories.size()
+        ));
+        cameraHuntBody.setText("今日推薦：" + recHunt.title + " — " + recHunt.prompt);
+        cameraRecommendedBtn.setText("📷 拍「" + recHunt.colorLabel + "」");
+        final int targetHuntId = recHunt.id;
+        cameraRecommendedBtn.setOnClickListener(v -> workshopController.showCaptureSourceDialog(targetHuntId));
 
         // 島嶼守護巨獸安撫試煉卡
         int frontierBiome = adventure.frontierBiomeIndex(progress);
@@ -885,6 +1107,9 @@ public class MainActivity extends Activity implements SensorEventListener {
                     progress, quest.id, noteInput.getText().toString(), todayStr
                 );
                 commitAndRefresh(r.message);
+                if (r.ok) {
+                    triggerCelebration(CelebrationOverlayView.STYLE_HARVEST, "👀 親子抬頭任務達成！", r.message);
+                }
             })
             .setNegativeButton("取消", null)
             .create();
@@ -921,6 +1146,9 @@ public class MainActivity extends Activity implements SensorEventListener {
                     String id = adventure.vault.items.get(which).id;
                     CampfireVault.OpenOutcome out = adventure.openVaultItem(progress, id, todayStr);
                     commitAndRefresh(out.message);
+                    if (out.ok) {
+                        triggerCelebration(CelebrationOverlayView.STYLE_CAMPFIRE, "🔥 營火開箱驚喜！", out.message);
+                    }
                     if (out.ok && !adventure.vault.isEmpty()) {
                         showCampfireUnboxDialog(); // 讓孩子連續開箱！
                     }
@@ -950,11 +1178,13 @@ public class MainActivity extends Activity implements SensorEventListener {
                 if (opened == 0) {
                     showShortToast("孵蛋巢已滿，先孵化一顆蛋就能打開剩餘的神祕蛋喔！");
                 } else {
-                    commitAndRefresh(String.format(
+                    String summary = String.format(
                         Locale.TAIWAN,
                         "🔥 營火派對開出 %d 件包裹！+%d 金幣、+%d 星砂%s",
                         opened, totalCoins, totalStars, eggsPlaced > 0 ? ("、放入 " + eggsPlaced + " 顆蛋！") : ""
-                    ));
+                    );
+                    commitAndRefresh(summary);
+                    triggerCelebration(CelebrationOverlayView.STYLE_CAMPFIRE, "🔥 營火派對大開箱！", summary);
                 }
             })
             .setNegativeButton("先留著", null)
@@ -967,8 +1197,16 @@ public class MainActivity extends Activity implements SensorEventListener {
         activeDialog = new AlertDialog.Builder(this)
             .setTitle("🎉 歡迎升級《走走冒險 2.0》")
             .setMessage(message)
-            .setPositiveButton("去看看秘密營地！", (d, w) -> switchTab(TAB_CAMP))
-            .setNegativeButton("太棒了", null)
+            .setPositiveButton("📖 看 4 頁新玩法導覽", (d, w) -> guideController.showOnboardingDialog(adventure))
+            .setNeutralButton("去看看秘密營地！", (d, w) -> {
+                adventure.guide.markOnboardingCompleted();
+                saveProgress();
+                switchTab(TAB_CAMP);
+            })
+            .setNegativeButton("太棒了", (d, w) -> {
+                adventure.guide.markOnboardingCompleted();
+                saveProgress();
+            })
             .create();
         activeDialog.show();
     }
@@ -981,6 +1219,12 @@ public class MainActivity extends Activity implements SensorEventListener {
             return;
         }
         commitAndRefresh(res.message);
+        boolean storyFinale = res.message.contains("結局") || res.message.contains("完成整本");
+        triggerCelebration(
+            storyFinale ? CelebrationOverlayView.STYLE_EVOLVE : CelebrationOverlayView.STYLE_HARVEST,
+            storyFinale ? "📖 繪本故事大結局！" : "✨ 奇遇任務完成！",
+            res.message
+        );
     }
 
     private void copyDailyReportToClipboard(String todayStr) {
@@ -1300,19 +1544,130 @@ public class MainActivity extends Activity implements SensorEventListener {
         super.onPause();
         if (adventureCanvas != null) adventureCanvas.stopIdleAnimation();
         if (campController != null) campController.stopAnimation();
+        if (celebrationOverlay != null) celebrationOverlay.stopAll();
+        if (mediaStore != null) mediaStore.releaseAll();
         if (sensorManager != null) sensorManager.unregisterListener(this);
     }
 
     @Override protected void onDestroy() {
         dismissActiveDialog();
+        if (celebrationOverlay != null) celebrationOverlay.stopAll();
+        if (mediaStore != null) mediaStore.releaseAll();
         updateExecutor.shutdownNow();
         super.onDestroy();
     }
 
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode != REQ) return;
-        register();
+        if (requestCode == REQ) {
+            register();
+            return;
+        }
+        if (requestCode == REQ_AUDIO) {
+            Runnable cb = pendingAudioPermissionCallback;
+            pendingAudioPermissionCallback = null;
+            if (grantResults != null && grantResults.length > 0
+                && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                if (cb != null) cb.run();
+            } else {
+                showShortToast("未開啟麥克風權限，仍可照常製作含照片與塗鴉的明信片！");
+            }
+        }
+    }
+
+    private boolean hasRecordAudioPermission() {
+        return checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void requestRecordAudioPermission(Runnable onGranted) {
+        pendingAudioPermissionCallback = onGranted;
+        requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_AUDIO);
+    }
+
+    @SuppressWarnings("deprecation")
+    private void launchSystemCamera(int huntId) {
+        pendingHuntId = huntId;
+        pendingMemoryId = "mem_" + System.currentTimeMillis();
+        devicePrefs.edit()
+            .putInt(KEY_PENDING_HUNT_ID, pendingHuntId)
+            .putString(KEY_PENDING_MEMORY_ID, pendingMemoryId)
+            .apply();
+
+        File captureFile = MemoryFileProvider.pendingCaptureFile(this);
+        if (captureFile.exists()) {
+            boolean ignored = captureFile.delete();
+        }
+        Uri outUri = MemoryFileProvider.uriForPendingCapture(this);
+        Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+        intent.putExtra(MediaStore.EXTRA_OUTPUT, outUri);
+        intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        try {
+            startActivityForResult(intent, REQ_CAMERA_CAPTURE);
+        } catch (ActivityNotFoundException ignored) {
+            showShortToast("找不到系統相機，已為你改用相簿挑選照片");
+            launchPhotoPicker(huntId);
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private void launchPhotoPicker(int huntId) {
+        pendingHuntId = huntId;
+        pendingMemoryId = "mem_" + System.currentTimeMillis();
+        devicePrefs.edit()
+            .putInt(KEY_PENDING_HUNT_ID, pendingHuntId)
+            .putString(KEY_PENDING_MEMORY_ID, pendingMemoryId)
+            .apply();
+
+        Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+        intent.setType("image/*");
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        try {
+            startActivityForResult(Intent.createChooser(intent, "選擇散步照片"), REQ_PICK_PHOTO);
+        } catch (ActivityNotFoundException ignored) {
+            showShortToast("找不到可用的照片選擇器");
+        }
+    }
+
+    @Override @SuppressWarnings("deprecation")
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_CAMERA_CAPTURE && requestCode != REQ_PICK_PHOTO) return;
+        if (resultCode != RESULT_OK) {
+            mediaStore.deleteTempCapture();
+            return;
+        }
+
+        int huntId = pendingHuntId > 0 ? pendingHuntId : devicePrefs.getInt(KEY_PENDING_HUNT_ID, 1);
+        String memId = (pendingMemoryId != null && !pendingMemoryId.isEmpty())
+            ? pendingMemoryId
+            : devicePrefs.getString(KEY_PENDING_MEMORY_ID, "mem_" + System.currentTimeMillis());
+
+        String savedPhoto;
+        if (requestCode == REQ_CAMERA_CAPTURE) {
+            File captured = MemoryFileProvider.pendingCaptureFile(this);
+            savedPhoto = mediaStore.importCapturedFile(captured, memId);
+            mediaStore.deleteTempCapture();
+        } else {
+            Uri picked = data != null ? data.getData() : null;
+            savedPhoto = mediaStore.importFromContentUri(picked, memId);
+        }
+
+        if (savedPhoto == null) {
+            showShortToast("照片讀取失敗，請重新拍攝或再試一次");
+            return;
+        }
+
+        ColorScavenger.HuntDef hunt = ColorScavenger.huntById(huntId);
+        ColorScavenger.AnalysisResult analysis = mediaStore.analyzeStoredPhoto(savedPhoto, hunt.targetColor);
+        workshopController.showWorkshopDialog(
+            progress,
+            adventure,
+            huntId,
+            memId,
+            savedPhoto,
+            analysis,
+            WorldClock.now()
+        );
     }
 
     private boolean hasStepPermission() {

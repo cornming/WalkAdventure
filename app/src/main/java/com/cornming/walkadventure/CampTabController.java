@@ -53,6 +53,13 @@ final class CampTabController {
         container.removeAllViews();
         String today = clock.isoDate;
 
+        if (state.guide.shouldShowTabTip(GuideState.TIP_CAMP)) {
+            container.addView(GuideDialogController.buildContextualTipCard(ctx, GuideState.TIP_CAMP, () -> {
+                state.guide.dismissTabTip(GuideState.TIP_CAMP);
+                host.onStateChanged(null);
+            }), UiKit.cardMargins(ctx));
+        }
+
         // 1. 互動式秘密營地畫布
         if (campCanvas == null) {
             campCanvas = new CampCanvasView(ctx);

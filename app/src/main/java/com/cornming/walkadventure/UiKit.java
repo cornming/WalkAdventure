@@ -156,4 +156,43 @@ final class UiKit {
         row.addView(right, lpR);
         return row;
     }
+
+    static boolean isReducedMotion(Context ctx) {
+        try {
+            float scale = android.provider.Settings.Global.getFloat(
+                ctx.getContentResolver(),
+                android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+                1f
+            );
+            return scale <= 0.01f;
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    static void animateFadeSlideIn(Context ctx, View target) {
+        if (target == null || isReducedMotion(ctx)) return;
+        target.animate().cancel();
+        target.setAlpha(0f);
+        target.setTranslationY(dp(ctx, 10));
+        target.animate()
+            .alpha(1f)
+            .translationY(0f)
+            .setDuration(190)
+            .setInterpolator(new android.view.animation.DecelerateInterpolator())
+            .start();
+    }
+
+    static void animatePopBounce(Context ctx, View target) {
+        if (target == null || isReducedMotion(ctx)) return;
+        target.animate().cancel();
+        target.setScaleX(0.92f);
+        target.setScaleY(0.92f);
+        target.animate()
+            .scaleX(1f)
+            .scaleY(1f)
+            .setDuration(220)
+            .setInterpolator(new android.view.animation.OvershootInterpolator(2.2f))
+            .start();
+    }
 }
