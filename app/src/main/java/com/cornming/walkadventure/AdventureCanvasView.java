@@ -9,18 +9,20 @@ import android.graphics.Path;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.Typeface;
+import android.os.SystemClock;
 import android.util.TypedValue;
 import android.view.View;
 import java.util.Locale;
 
 /**
- * 冒險分頁主畫布（2.0 升級版）：
- * 動態真實時段天空漸層、四季漂浮粒子、家人壽星彩旗、12 位旅伴 3 階段進化與飾品繪製、
- * 家庭出隊成員列、今日真實步數與五大主題島嶼（含第 8 格守護巨獸地標）。
+ * 冒險分頁主畫布（平滑動畫繪本版）：
+ * 支援真實時段漸層天空、柔和太陽／月光脈動、8 顆連續飄落四季微粒、壽星彩旗、
+ * 平滑補間經驗條、12 位進化旅伴呼吸律動與小人流暢漫步動畫。
  */
 final class AdventureCanvasView extends View {
     private static final float DESIGN_WIDTH = 540f;
     private static final float DESIGN_HEIGHT = 556f;
+    private static final long FRAME_INTERVAL_MS = 33L; // ~30fps 節能流暢動畫
 
     private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint skyPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -39,16 +41,24 @@ final class AdventureCanvasView extends View {
     private String companionName = "";
     private String statusSummary = "";
     private boolean statusHighlighted = false;
+
     private boolean animating = false;
-    private int animTick = 0;
+    private long animStartMs = 0L;
+    private long lastDrawMs = 0L;
+    private float phaseSec = 0f;
+    private float displayedXpRatio = -1f;
     private int cachedSkyTod = -1;
 
-    private final Runnable animStep = new Runnable() {
+    private final Runnable animFrame = new Runnable() {
         @Override public void run() {
             if (!animating) return;
-            animTick = (animTick + 1) % 60;
-            invalidate();
-            postDelayed(this, 650);
+            long now = SystemClock.uptimeMillis();
+            if (now - lastDrawMs >= FRAME_INTERVAL_MS) {
+                lastDrawMs = now;
+                phaseSec = (now - animStartMs) / 1000f;
+                invalidate();
+            }
+            postOnAnimation(this);
         }
     };
 
@@ -80,15 +90,16 @@ final class AdventureCanvasView extends View {
     }
 
     void startIdleAnimation() {
-        if (animating) return;
+        if (animating || UiKit.isReducedMotion(getContext())) return;
         animating = true;
-        removeCallbacks(animStep);
-        postDelayed(animStep, 650);
+        if (animStartMs == 0L) animStartMs = SystemClock.uptimeMillis();
+        removeCallbacks(animFrame);
+        postOnAnimation(animFrame);
     }
 
     void stopIdleAnimation() {
         animating = false;
-        removeCallbacks(animStep);
+        removeCallbacks(animFrame);
     }
 
     @Override protected void onDetachedFromWindow() {
@@ -174,43 +185,71 @@ final class AdventureCanvasView extends View {
         }
         c.drawRect(0f, 0f, w, 198f, skyPaint);
 
-        // 太陽或月亮星星
+        float pulse = (float) Math.sin(phaseSec * 2.2f);
         p.setStyle(Paint.Style.FILL);
         if (clock.timeOfDay == WorldClock.TIME_NIGHT) {
+            p.setColor(Color.argb(40, 255, 240, 175));
+            c.drawCircle(w - 58f, 34f, 19f + pulse * 2.5f, p);
             p.setColor(Color.rgb(255, 238, 168));
             c.drawCircle(w - 58f, 34f, 13f, p);
             p.setColor(WorldClock.skyTopRgb(clock.timeOfDay));
             c.drawCircle(w - 52f, 30f, 11f, p);
-            p.setColor(Color.rgb(255, 245, 190));
-            float tw = (animTick % 2 == 0) ? 2.6f : 1.6f;
-            c.drawCircle(w - 115f, 22f, tw, p);
-            c.drawCircle(w - 150f, 40f, 3.6f - tw, p);
-            c.drawCircle(185f, 24f, tw, p);
+            for (int s = 0; s < 5; s++) {
+                float sx = 140f + s * 64f;
+                float sy = 16f + ((s * 17) % 34);
+                float tw = 1.6f + 1.4f * (float) Math.abs(Math.sin(phaseSec * 2.4f + s * 1.3f));
+                p.setColor(Color.argb(215, 255, 246, 190));
+                c.drawCircle(sx, sy, tw, p);
+            }
         } else {
+            int haloColor = clock.timeOfDay == WorldClock.TIME_DUSK
+                ? Color.argb(55, 255, 160, 96)
+                : Color.argb(55, 255, 224, 118);
+            p.setColor(haloColor);
+            c.drawCircle(w - 52f, 32f, 21f + pulse * 3f, p);
             p.setColor(clock.timeOfDay == WorldClock.TIME_DUSK ? Color.rgb(245, 122, 66) : Color.rgb(255, 218, 102));
             c.drawCircle(w - 52f, 32f, 14f, p);
         }
 
-        // 四季漂浮微粒（春花瓣／夏螢火／秋楓葉／冬雪花）
-        int particleColor;
-        if (clock.season == WorldClock.SEASON_SPRING) particleColor = Color.argb(170, 245, 162, 188);
-        else if (clock.season == WorldClock.SEASON_SUMMER) particleColor = Color.argb(190, 255, 240, 128);
-        else if (clock.season == WorldClock.SEASON_AUTUMN) particleColor = Color.argb(170, 224, 124, 52);
-        else particleColor = Color.argb(190, 255, 255, 255);
-        p.setColor(particleColor);
-        float shift = (animTick % 4) * 3f;
-        c.drawCircle(95f + shift, 28f + (animTick % 2) * 3f, 3.2f, p);
-        c.drawCircle(260f - shift, 44f + (animTick % 3) * 2f, 3.6f, p);
-        c.drawCircle(w - 135f + shift, 54f, 2.8f, p);
+        // 8 顆流暢飄浮的四季微粒（春櫻花瓣／夏螢火蟲／秋楓葉／冬雪花）
+        for (int i = 0; i < 8; i++) {
+            float seed = i * 1.17f;
+            float px;
+            float py;
+            if (clock.season == WorldClock.SEASON_SUMMER) {
+                px = 60f + ((i * 68f + (float) Math.sin(phaseSec * 1.1f + seed) * 26f) % (w - 80f));
+                py = 22f + (i % 3) * 18f + (float) Math.cos(phaseSec * 1.8f + seed) * 7f;
+                int glowAlpha = 110 + (int) (130 * Math.abs(Math.sin(phaseSec * 2.6f + seed)));
+                p.setColor(Color.argb(glowAlpha, 255, 242, 128));
+                c.drawCircle(px, py, 3.2f, p);
+            } else {
+                float fallProgress = ((phaseSec * (0.14f + (i % 3) * 0.04f) + i * 0.13f) % 1f);
+                py = 8f + fallProgress * 78f;
+                px = ((48f + i * 64f + (float) Math.sin(phaseSec * 1.7f + seed) * 18f + fallProgress * 28f) % (w - 40f));
+                int alpha = Math.round((1f - Math.abs(fallProgress - 0.5f) * 1.6f) * 195f);
+                alpha = Math.max(40, Math.min(200, alpha));
+                if (clock.season == WorldClock.SEASON_SPRING) {
+                    p.setColor(Color.argb(alpha, 245, 152, 186));
+                    c.drawOval(px - 4f, py - 2.4f, px + 4f, py + 2.4f, p);
+                } else if (clock.season == WorldClock.SEASON_AUTUMN) {
+                    p.setColor(Color.argb(alpha, 224, 122, 48));
+                    c.drawOval(px - 4.2f, py - 2.6f, px + 4.2f, py + 2.6f, p);
+                } else {
+                    p.setColor(Color.argb(alpha, 255, 255, 255));
+                    c.drawCircle(px, py, 2.8f, p);
+                }
+            }
+        }
 
-        // 家人壽星彩旗裝飾
+        // 家人壽星慶生彩旗（微風輕輕擺動）
         String bday = state.family.birthdayCelebrantName(clock);
         if (!bday.isEmpty()) {
             int[] flagColors = {0xFFE86688, 0xFFF5BF42, 0xFF548FD6, 0xFF70AF74};
+            float sway = (float) Math.sin(phaseSec * 3.2f) * 2.2f;
             for (int i = 0; i < 8; i++) {
                 float fx = 28f + i * 62f;
                 p.setColor(flagColors[i % flagColors.length]);
-                drawTriangle(c, fx, 0f, fx + 24f, 0f, fx + 12f, 14f);
+                drawTriangle(c, fx, 0f, fx + 24f, 0f, fx + 12f + sway, 14f);
             }
         }
     }
@@ -233,9 +272,10 @@ final class AdventureCanvasView extends View {
     private void drawBiomeScenery(Canvas c, float left, float top, float right, float bottom, int biomeIdx) {
         p.setStyle(Paint.Style.FILL);
         float w = right - left;
+        float wave = (float) Math.sin(phaseSec * 2.4f);
         if (biomeIdx == 0) {
             p.setColor(Color.rgb(255, 224, 120));
-            c.drawCircle(right - 34, top + 28, 13, p);
+            c.drawCircle(right - 34, top + 28, 13 + wave * 1.2f, p);
             p.setColor(Color.argb(65, 112, 175, 116));
             c.drawCircle(left + w * 0.25f, bottom + 14, 52, p);
             c.drawCircle(left + w * 0.72f, bottom + 18, 60, p);
@@ -243,36 +283,40 @@ final class AdventureCanvasView extends View {
             p.setColor(Color.argb(65, 62, 132, 88));
             drawTriangle(c, left + 40, bottom - 2, left + 65, top + 46, left + 90, bottom - 2);
             drawTriangle(c, right - 95, bottom - 2, right - 68, top + 40, right - 41, bottom - 2);
-            p.setColor(Color.argb(180, 255, 240, 140));
-            float sparkleOffset = (animTick % 2 == 0) ? 0f : 3f;
-            c.drawCircle(left + 120, top + 34 + sparkleOffset, 3, p);
-            c.drawCircle(right - 130, top + 48 - sparkleOffset, 3, p);
+            p.setColor(Color.argb(190, 255, 240, 140));
+            c.drawCircle(left + 120 + wave * 6f, top + 34 + wave * 3f, 3.2f, p);
+            c.drawCircle(right - 130 - wave * 5f, top + 48 - wave * 3f, 2.8f, p);
         } else if (biomeIdx == 2) {
             p.setColor(Color.argb(75, 222, 156, 62));
             drawTriangle(c, right - 125, bottom - 2, right - 88, top + 44, right - 51, bottom - 2);
             p.setColor(Color.rgb(245, 175, 65));
-            c.drawCircle(right - 36, top + 28, 14, p);
+            c.drawCircle(right - 36, top + 28, 14 + wave * 1.2f, p);
         } else if (biomeIdx == 3) {
             p.setColor(Color.argb(80, 96, 152, 222));
             drawTriangle(c, left + 38, bottom - 2, left + 56, top + 42, left + 74, bottom - 2);
             drawTriangle(c, right - 88, bottom - 2, right - 68, top + 38, right - 48, bottom - 2);
             p.setColor(Color.rgb(255, 232, 140));
-            float tw = (animTick % 2 == 0) ? 3.5f : 2f;
+            float tw = 2.6f + 1.2f * wave;
             c.drawCircle(left + 140, top + 24, tw, p);
-            c.drawCircle(right - 120, top + 30, 5f - tw, p);
+            c.drawCircle(right - 120, top + 30, 5.2f - tw, p);
         } else {
             p.setColor(Color.argb(75, 214, 90, 56));
             drawTriangle(c, right - 120, bottom - 2, right - 80, top + 40, right - 40, bottom - 2);
             p.setColor(Color.rgb(255, 198, 92));
-            float ember = (animTick % 2 == 0) ? -2f : 2f;
-            c.drawCircle(right - 80, top + 32 + ember, 3.2f, p);
-            c.drawCircle(right - 64, top + 24 - ember, 2.4f, p);
+            float ember = (phaseSec * 14f) % 18f;
+            c.drawCircle(right - 80 + wave * 3f, top + 38 - ember, 3.2f, p);
+            c.drawCircle(right - 64 - wave * 3f, top + 30 - ((ember + 9f) % 18f), 2.4f, p);
         }
     }
 
     private void drawMiniExplorer(Canvas c, float cx, float cy, float bob) {
         float y = cy + bob;
         p.setStyle(Paint.Style.FILL);
+        // 腳下柔和投影（隨跳躍縮小）
+        p.setColor(Color.argb(45, 58, 42, 32));
+        float shadowR = Math.max(4f, 8.5f + bob * 0.45f);
+        c.drawOval(cx - shadowR, cy + 12f, cx + shadowR, cy + 16f, p);
+
         p.setColor(Color.rgb(74, 138, 86));
         c.drawCircle(cx, y + 4, 8.5f, p);
         p.setColor(Color.rgb(255, 232, 198));
@@ -310,12 +354,18 @@ final class AdventureCanvasView extends View {
         int biomeIdx = state.activeDisplayBiomeIndex(progress);
         AdventureCatalog.BiomeDef biome = AdventureCatalog.biome(biomeIdx);
         long xp = state.xpInLevel(progress);
-        float xpRatio = Math.max(0f, Math.min(1f, xp / (float) StepProgress.STEPS_PER_CHEST));
+        float targetXpRatio = Math.max(0f, Math.min(1f, xp / (float) StepProgress.STEPS_PER_CHEST));
+        if (displayedXpRatio < 0f || !animating) {
+            displayedXpRatio = targetXpRatio;
+        } else {
+            displayedXpRatio += (targetXpRatio - displayedXpRatio) * 0.22f;
+        }
         int streak = state.effectiveStreak(today);
-        float bob = (animTick % 2 == 0) ? 0f : -2.5f;
+        float petBob = (float) Math.sin(phaseSec * 3.0f) * 3.2f;
+        float explorerBob = -(float) Math.abs(Math.sin(phaseSec * 4.2f)) * 5.2f;
+        int animTick = (int) (phaseSec * 2f);
         int headerInk = WorldClock.isDarkSky(clock.timeOfDay) ? Color.rgb(255, 247, 232) : ink;
 
-        // 頂部季節時段標語與連勝火焰
         String envTag = WorldClock.seasonLabel(clock.season) + " · " + WorldClock.timeOfDayLabel(clock.timeOfDay);
         if (!clock.holidayName.isEmpty()) {
             envTag = "🎉 " + clock.holidayName + " · " + WorldClock.timeOfDayLabel(clock.timeOfDay);
@@ -334,7 +384,6 @@ final class AdventureCanvasView extends View {
             drawCenteredText(c, "🔥 連 " + streak + " 天", 76, 54, 12, true, Color.rgb(168, 72, 20));
         }
 
-        // 出隊家庭小隊標籤
         String squadPill = (state.family.isFamilyMode() ? "🎈出隊：" : "☀️小隊：") + state.family.formatActiveSquadLabel();
         if (squadPill.length() > 18) squadPill = squadPill.substring(0, 17) + "…";
         p.setStyle(Paint.Style.FILL);
@@ -361,14 +410,13 @@ final class AdventureCanvasView extends View {
         String stageNote = (oc != null && cid != CompanionSystem.ID_NONE)
             ? ("（" + CompanionSystem.species(cid).stageTitle(oc.stage) + "）")
             : "";
-        String subPerk = "夥伴：" + companionName + stageNote;
-        text(c, subPerk, 96, 132, 13, false, Color.rgb(104, 78, 60));
+        text(c, "夥伴：" + companionName + stageNote, 96, 132, 13, false, Color.rgb(104, 78, 60));
 
         p.setColor(Color.rgb(230, 210, 180));
         c.drawRoundRect(96, 144, w - 98, 160, 8, 8, p);
-        if (xpRatio > 0f) {
+        if (displayedXpRatio > 0.005f) {
             p.setColor(biome.accentRgb);
-            float barRight = Math.min(w - 98f, Math.max(108f, 96f + (w - 194f) * xpRatio));
+            float barRight = Math.min(w - 98f, Math.max(108f, 96f + (w - 194f) * displayedXpRatio));
             c.drawRoundRect(96, 144, barRight, 160, 8, 8, p);
         }
         text(
@@ -381,26 +429,30 @@ final class AdventureCanvasView extends View {
             int stage = oc != null ? oc.stage : 1;
             boolean shiny = oc != null && oc.shiny;
             int acc = oc != null ? oc.accessory : CompanionSystem.ACC_NONE;
-            assets.drawCompanion(c, w - 54f, 136f + bob, cid, stage, shiny, acc, 1.0f, animTick, ink);
+            assets.drawCompanion(c, w - 54f, 136f + petBob, cid, stage, shiny, acc, 1.0f, animTick, ink);
         }
 
         // 今日真實步數區塊
         text(c, "今日真實步數", 24, 224, 15, true, ink);
         text(c, String.valueOf(progress.todayStepsOn(today)), 24, 268, 42, true, ink);
-        String lifeText = String.format(
+        text(c, String.format(
             Locale.TAIWAN,
             "累計 %d 步 · 每 1,000 步寶箱（下次 %d）",
             progress.lifetime,
             progress.nextChestAt()
-        );
-        text(c, lifeText, 24, 294, 12.5f, false, Color.rgb(104, 78, 60));
+        ), 24, 294, 12.5f, false, Color.rgb(104, 78, 60));
 
-        // 營火盒／蛋巢小提示徽章（右側）
+        // 營火盒呼吸脈動提示徽章
         if (state.vault.count() > 0) {
+            float vScale = 1f + 0.04f * (float) Math.sin(phaseSec * 4.5f);
+            c.save();
+            c.translate(w - 95f, 244f);
+            c.scale(vScale, vScale);
             p.setColor(Color.rgb(255, 224, 198));
-            rect.set(w - 168f, 224f, w - 22f, 264f);
+            rect.set(-73f, -20f, 73f, 20f);
             c.drawRoundRect(rect, 14f, 14f, p);
-            drawCenteredText(c, "🔥 營火盒 ×" + state.vault.count(), w - 95f, 244f, 13, true, Color.rgb(176, 62, 32));
+            drawCenteredText(c, "🔥 營火盒 ×" + state.vault.count(), 0f, 0f, 13, true, Color.rgb(176, 62, 32));
+            c.restore();
         }
 
         // 主題島嶼地圖關卡卡片
@@ -416,10 +468,9 @@ final class AdventureCanvasView extends View {
         boolean bossCleared = state.stories.isBossCleared(biomeIdx);
         String bossLine = bossCleared
             ? "👑 已安撫守護巨獸「" + boss.name + "」"
-            : "🐲 守護巨獸：" + boss.name + "（走滿步數或抬頭任務安撫）";
+            : "🐲 守護巨獸：" + boss.name + "（走滿步數或抬頭／相機尋寶安撫）";
         text(c, bossLine, 34, 362, 12, false, Color.rgb(100, 80, 64));
 
-        // 8 格探索路徑與小人動畫
         int lit = state.displayBiomeLitCells(progress);
         boolean isFrontier = (biomeIdx == state.frontierBiomeIndex(progress));
         float pathY = 434f;
@@ -442,7 +493,7 @@ final class AdventureCanvasView extends View {
         if (isFrontier) {
             int explorerSlot = Math.min(AdventureCatalog.CELLS_PER_BIOME - 1, lit);
             float ex = 54f + explorerSlot * stepX;
-            drawMiniExplorer(c, ex, pathY - 32f, bob);
+            drawMiniExplorer(c, ex, pathY - 32f, explorerBob);
         }
 
         String progressLabel = isFrontier
@@ -456,7 +507,6 @@ final class AdventureCanvasView extends View {
             : String.format(Locale.TAIWAN, "已探索完成（%d / %d 格）", lit, AdventureCatalog.CELLS_PER_BIOME);
         text(c, progressLabel, 34, 486, 12.5f, true, ink);
 
-        // 底部感測器狀態列
         int statusColor = statusHighlighted ? Color.rgb(180, 62, 34) : Color.rgb(112, 92, 76);
         text(c, statusSummary, 24, 534, 13, statusHighlighted, statusColor);
 

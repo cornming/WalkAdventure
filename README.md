@@ -33,6 +33,10 @@
 - **小隊分頁**：家庭小隊護照管理、近 7 天步數長條圖與戰報複製、每日步數任務、四季印章護照（每季 8 枚）、24 項成就稱號、冒險日誌，以及一鍵複製／貼上還原本機 2.0 備份 JSON。
 - **100% 舊存檔向下相容與元老禮遇**：從 `v0.1.0–v0.5.0` 覆蓋安裝升級時，原有真實步數、金幣、裝備、旅伴與營地全數無痛保留；硬體計步基準仍隔離於 `walk_adventure_device`，並保留 GitHub Releases SHA-256 驗證自動更新。
 
+### 6. 繪本新手引導與流暢慶祝動畫
+- **4 頁互動繪本導覽 × 分頁情境小幫手 × 隨時可開說明手冊**：首次開啟自動帶領認識平日／親子雙模式、營地互動、相機明信片與口袋模式；4 個分頁皆附可關閉的首次造訪提示卡，點擊頂部「❓」可隨時翻閱 8 項玩法指南或重播導覽。
+- **流暢 30–60fps 繪本畫布與全螢幕慶祝動畫**：探險與營地畫布具備連續飄落四季粒子、太陽／星光呼吸脈動、營火火星上升、待破殼神祕蛋俏皮搖晃、摸摸旅伴冒出愛心與對話泡泡，以及營火開箱、孵蛋破殼、進化升級、收成與明信片完成時的穿透式彩帶粒子慶祝動畫（自動尊重 Android 系統「移除動畫」無障礙設定）。
+
 ### 步數怎麼算
 
 手機的計步感測器回報的是「開機以來的累計步數」，App 每次讀到新的數字，就把和上一次讀數的差額加進進度。規則寫在 [`StepProgress.java`](app/src/main/java/com/cornming/walkadventure/StepProgress.java)，2.0 遊戲系統與序列化寫在 [`AdventureState.java`](app/src/main/java/com/cornming/walkadventure/AdventureState.java)、[`CompanionSystem.java`](app/src/main/java/com/cornming/walkadventure/CompanionSystem.java)、[`CampState.java`](app/src/main/java/com/cornming/walkadventure/CampState.java)、[`StoryCatalog.java`](app/src/main/java/com/cornming/walkadventure/StoryCatalog.java) 與 [`SaveCodec.java`](app/src/main/java/com/cornming/walkadventure/SaveCodec.java)：

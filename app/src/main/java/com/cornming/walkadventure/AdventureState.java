@@ -47,6 +47,7 @@ final class AdventureState {
     final CompanionSystem companions = new CompanionSystem();
     final CampState camp = new CampState();
     final StoryCatalog stories = new StoryCatalog();
+    final GuideState guide = new GuideState();
 
     boolean pioneerBadge = false;
     String migratedFrom = "";

@@ -127,6 +127,8 @@ final class SaveCodec {
         root.put("rainbowCompletedSets", (long) state.rainbowCompletedSets);
         root.put("photoHuntsCompleted", (long) state.photoHuntsCompleted);
         root.put("voiceMemoriesCount", (long) state.voiceMemoriesCount);
+        root.put("onboardingCompleted", state.guide.onboardingCompleted);
+        root.put("seenTipsMask", (long) state.guide.seenTipsMask);
 
         // family
         Map<String, Object> fam = new LinkedHashMap<>();
@@ -318,6 +320,8 @@ final class SaveCodec {
         state.rainbowCompletedSets = Math.max(0, asInt(root.get("rainbowCompletedSets"), 0));
         state.photoHuntsCompleted = Math.max(0, asInt(root.get("photoHuntsCompleted"), 0));
         state.voiceMemoriesCount = Math.max(0, asInt(root.get("voiceMemoriesCount"), 0));
+        state.guide.onboardingCompleted = asBool(root.get("onboardingCompleted"), false);
+        state.guide.seenTipsMask = asInt(root.get("seenTipsMask"), 0);
 
         // family
         Map<String, Object> fam = asMap(root.get("family"));

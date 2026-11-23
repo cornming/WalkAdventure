@@ -50,6 +50,13 @@ final class JournalTabController {
     ) {
         container.removeAllViews();
 
+        if (state.guide.shouldShowTabTip(GuideState.TIP_JOURNAL)) {
+            container.addView(GuideDialogController.buildContextualTipCard(ctx, GuideState.TIP_JOURNAL, () -> {
+                state.guide.dismissTabTip(GuideState.TIP_JOURNAL);
+                host.onStateChanged(null);
+            }), UiKit.cardMargins(ctx));
+        }
+
         // 1. 總覽與快速拍照尋寶按鈕
         LinearLayout summaryCard = UiKit.makeSectionCard(ctx, UiKit.COLOR_CARD_GOLD);
         UiKit.addCardTitle(ctx, summaryCard, String.format(

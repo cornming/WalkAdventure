@@ -45,6 +45,13 @@ final class SquadTabController {
         container.removeAllViews();
         String today = clock.isoDate;
 
+        if (state.guide.shouldShowTabTip(GuideState.TIP_SQUAD)) {
+            container.addView(GuideDialogController.buildContextualTipCard(ctx, GuideState.TIP_SQUAD, () -> {
+                state.guide.dismissTabTip(GuideState.TIP_SQUAD);
+                host.onStateChanged(null);
+            }), UiKit.cardMargins(ctx));
+        }
+
         // 1. 家庭小隊護照（純本機、無須帳號）
         UiKit.addSectionHeader(ctx, container, "👨‍👩‍👧 家庭小隊護照（勾選今日一起出門的成員）");
         LinearLayout squadCard = UiKit.makeSectionCard(ctx, UiKit.COLOR_CARD_GOLD);
