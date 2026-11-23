@@ -32,7 +32,7 @@ final class AdventureCatalog {
     static final int ENCOUNTER_STARTER = 4;
     static final int ENCOUNTER_STORY = 5;
 
-    static final int EXTRA_ACHIEVEMENT_COUNT = 10;
+    static final int EXTRA_ACHIEVEMENT_COUNT = 14;
 
     private AdventureCatalog() {}
 
@@ -178,7 +178,11 @@ final class AdventureCatalog {
         new AchievementDef(6, "秘密基地長", "營地所有設施累計升級達 10 級", 120),
         new AchievementDef(7, "奇幻豐收王", "在奇幻小菜園累計採收 5 次作物", 80),
         new AchievementDef(8, "繪本收藏家", "完成 3 條完整的連貫繪本故事", 100),
-        new AchievementDef(9, "抬頭看世界", "完成 5 次線下親子抬頭任務", 90)
+        new AchievementDef(9, "抬頭看世界", "完成 5 次線下親子抬頭任務", 90),
+        new AchievementDef(10, "小小攝影師", "完成第 1 次實境相機尋寶並製成明信片", 60),
+        new AchievementDef(11, "彩虹收集王", "在現實世界集滿七色彩虹尋寶照片", 150),
+        new AchievementDef(12, "回憶明信片家", "累計製作 5 張實境冒險明信片", 100),
+        new AchievementDef(13, "童言錄音師", "在冒險明信片中錄下第 1 段親子語音便條", 60)
     };
 
     static BiomeDef biome(int index) {

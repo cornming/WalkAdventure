@@ -57,6 +57,12 @@ final class AdventureState {
     String lastBirthdayGiftDate = "";
     String lastPenguinSnackDate = "";
 
+    // Phase 2（實境相機尋寶與明信片回憶）
+    int rainbowCollectedMask = 0;
+    int rainbowCompletedSets = 0;
+    int photoHuntsCompleted = 0;
+    int voiceMemoriesCount = 0;
+
     static final class DailyRecord {
         final String date;
         long steps;
@@ -687,7 +693,11 @@ final class AdventureState {
             camp.totalBuildingLevels() >= 10,
             gardenHarvestCount >= 5,
             stories.completedArcCount() >= 3,
-            stories.totalLookUpCompleted >= 5
+            stories.totalLookUpCompleted >= 5,
+            photoHuntsCompleted >= 1,
+            rainbowCompletedSets >= 1 || rainbowCollectedMask == ColorScavenger.RAINBOW_COMPLETE_MASK,
+            stories.memories.size() >= 5 || photoHuntsCompleted >= 5,
+            voiceMemoriesCount >= 1
         };
         for (int i = 0; i < AdventureCatalog.EXTRA_ACHIEVEMENTS.length; i++) {
             if (!isExtraAchievementUnlocked(i) && conds[i]) {
@@ -703,6 +713,167 @@ final class AdventureState {
             }
         }
         return newlyUnlocked;
+    }
+
+    static final class PhotoHuntOutcome {
+        final boolean ok;
+        final StoryCatalog.MemoryEntry created;
+        final StoryCatalog.MemoryEntry evictedOldest;
+        final boolean completedRainbowSet;
+        final int coinsGained;
+        final int starSandGained;
+        final String message;
+
+        PhotoHuntOutcome(
+            boolean ok,
+            StoryCatalog.MemoryEntry created,
+            StoryCatalog.MemoryEntry evictedOldest,
+            boolean completedRainbowSet,
+            int coinsGained,
+            int starSandGained,
+            String message
+        ) {
+            this.ok = ok;
+            this.created = created;
+            this.evictedOldest = evictedOldest;
+            this.completedRainbowSet = completedRainbowSet;
+            this.coinsGained = coinsGained;
+            this.starSandGained = starSandGained;
+            this.message = message;
+        }
+    }
+
+    boolean isRainbowColorCollected(int colorIndex) {
+        if (colorIndex < 0 || colorIndex >= ColorScavenger.RAINBOW_COUNT) return false;
+        return (rainbowCollectedMask & (1 << colorIndex)) != 0;
+    }
+
+    int rainbowCollectedCount() {
+        return Integer.bitCount(rainbowCollectedMask & ColorScavenger.RAINBOW_COMPLETE_MASK);
+    }
+
+    /**
+     * 完成一次實境相機尋寶並製成冒險明信片：
+     * 發放金幣、星砂、旅伴羈絆、更新彩虹七色圖鑑，並連動島嶼守護巨獸與成就系統。
+     */
+    PhotoHuntOutcome completePhotoHunt(
+        StepProgress progress,
+        String memoryId,
+        int huntId,
+        String photoPath,
+        String doodlePath,
+        String audioPath,
+        String kidNote,
+        int parentStars,
+        ColorScavenger.AnalysisResult analysis,
+        WorldClock.Snapshot clock
+    ) {
+        if (progress == null || clock == null) {
+            return new PhotoHuntOutcome(false, null, null, false, 0, 0, "目前無法儲存明信片");
+        }
+        ColorScavenger.HuntDef hunt = ColorScavenger.huntById(huntId);
+        int clampedStars = Math.max(1, Math.min(3, parentStars));
+        boolean colorMatched = analysis != null && analysis.targetMatched;
+        int domHue = analysis != null ? analysis.dominantHue : -1;
+        String colorLabel = hunt.isRainbowColorHunt()
+            ? hunt.colorLabel
+            : (analysis != null ? analysis.dominantColorName : hunt.colorLabel);
+
+        int coinsGained = hunt.baseCoins + clampedStars * 8 + (colorMatched ? 10 : 0);
+        int starGained = hunt.baseStarSand + clampedStars * 4 + (colorMatched ? 4 : 0);
+        if (activeCompanionId() == CompanionSystem.ID_OTTER) {
+            starGained += 12;
+        }
+
+        progress.coins += coinsGained;
+        camp.starSand += starGained;
+        CompanionSystem.OwnedCompanion oc = companions.getOwned(activeCompanionId());
+        int bondGain = 22 + clampedStars * 6;
+        if (oc != null) {
+            oc.addBondXp(bondGain);
+        }
+
+        // 拍照尋寶同樣可作為「安撫島嶼守護巨獸」的實境互動條件！
+        stories.bossLookUpDone = true;
+        if (family.isFamilyMode() || family.members.size() >= 2) {
+            stories.unlockSeasonStamp(1); // 親子出動
+        }
+
+        int cid = activeCompanionId();
+        int cStage = oc != null ? oc.stage : 1;
+        boolean cShiny = oc != null && oc.shiny;
+        String cleanNote = kidNote != null ? kidNote.trim() : "";
+        if (cleanNote.length() > 80) cleanNote = cleanNote.substring(0, 80);
+
+        StoryCatalog.MemoryEntry entry = new StoryCatalog.MemoryEntry(
+            memoryId,
+            clock.isoDate,
+            hunt.title,
+            family.formatActiveSquadLabel(),
+            photoPath,
+            audioPath,
+            doodlePath,
+            cleanNote,
+            hunt.id,
+            colorLabel,
+            domHue,
+            clampedStars,
+            progress.todayStepsOn(clock.isoDate),
+            cid,
+            cStage,
+            cShiny,
+            clock.season
+        );
+        StoryCatalog.MemoryEntry evicted = stories.addMemory(entry);
+
+        photoHuntsCompleted++;
+        if (audioPath != null && !audioPath.trim().isEmpty()) {
+            voiceMemoriesCount++;
+        }
+
+        // 彩虹七色圖鑑收集判定
+        boolean completedRainbowNow = false;
+        if (hunt.isRainbowColorHunt()) {
+            int bit = 1 << hunt.targetColor;
+            boolean isNewColor = (rainbowCollectedMask & bit) == 0;
+            rainbowCollectedMask |= bit;
+            if (isNewColor && (rainbowCollectedMask & ColorScavenger.RAINBOW_COMPLETE_MASK) == ColorScavenger.RAINBOW_COMPLETE_MASK) {
+                completedRainbowNow = true;
+                rainbowCompletedSets++;
+                progress.coins += 100L;
+                camp.starSand += 35;
+                coinsGained += 100;
+                starGained += 35;
+                if (companions.hasFreeEggSlot()) {
+                    companions.addEgg(CompanionSystem.EGG_BLOOM, frontierBiomeIndex(progress));
+                } else {
+                    enqueueIntoVaultSafe(
+                        progress,
+                        CampfireVault.KIND_EGG,
+                        "彩虹七色奇蹟蛋",
+                        0,
+                        8,
+                        CompanionSystem.EGG_BLOOM,
+                        clock.isoDate
+                    );
+                }
+                appendLog(clock.isoDate, "🌈 集滿現實世界彩虹七色！獲得 +100 金幣、+35 星砂與花瓣奇蹟蛋！");
+            }
+        }
+
+        DailyRecord rec = ensureDailyRecord(clock.isoDate);
+        rec.coinsEarned += coinsGained;
+        String msg = String.format(
+            Locale.TAIWAN,
+            "📮 實境明信片「%s」完成！+%d 金幣、+%d 星砂%s",
+            hunt.title,
+            coinsGained,
+            starGained,
+            completedRainbowNow ? " · 🌈 達成彩虹七色全收集大獎！" : ""
+        );
+        appendLog(clock.isoDate, msg);
+        evaluateExtraAchievements(progress, clock.isoDate);
+        return new PhotoHuntOutcome(true, entry, evicted, completedRainbowNow, coinsGained, starGained, msg);
     }
 
     /** 啟動或換日時同步 2.0 環境狀態（四季護照、每日抬頭任務、家庭壽星禮包與企鵝連勝點心）。 */
