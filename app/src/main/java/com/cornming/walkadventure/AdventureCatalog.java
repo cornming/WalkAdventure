@@ -32,7 +32,7 @@ final class AdventureCatalog {
     static final int ENCOUNTER_STARTER = 4;
     static final int ENCOUNTER_STORY = 5;
 
-    static final int EXTRA_ACHIEVEMENT_COUNT = 14;
+    static final int EXTRA_ACHIEVEMENT_COUNT = 20;
 
     private AdventureCatalog() {}
 
@@ -182,7 +182,13 @@ final class AdventureCatalog {
         new AchievementDef(10, "小小攝影師", "完成第 1 次實境相機尋寶並製成明信片", 60),
         new AchievementDef(11, "彩虹收集王", "在現實世界集滿七色彩虹尋寶照片", 150),
         new AchievementDef(12, "回憶明信片家", "累計製作 5 張實境冒險明信片", 100),
-        new AchievementDef(13, "童言錄音師", "在冒險明信片中錄下第 1 段親子語音便條", 60)
+        new AchievementDef(13, "童言錄音師", "在冒險明信片中錄下第 1 段親子語音便條", 60),
+        new AchievementDef(14, "尋寶藏寶師", "完成第 1 次 NFC 卡片或離線 QR 實體尋寶", 80),
+        new AchievementDef(15, "暖心傳情家", "透過離線 QR 禮物卡送出或領取家族禮物", 70),
+        new AchievementDef(16, "迷霧開拓者", "探索並點亮 5 格本機足跡迷霧或秘密基地", 100),
+        new AchievementDef(17, "環境感應師", "觸發光線或步頻真實環境探索彩蛋", 70),
+        new AchievementDef(18, "小小自然學家", "在自然生態圖鑑鑑定解鎖 4 種以上自然類別", 90),
+        new AchievementDef(19, "自然百科全書", "集滿全部 8 種自然生態圖鑑類別", 180)
     };
 
     static BiomeDef biome(int index) {

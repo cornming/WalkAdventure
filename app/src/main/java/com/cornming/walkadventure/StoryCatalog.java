@@ -150,7 +150,7 @@ final class StoryCatalog {
         }
     }
 
-    /** Phase 2 實境相機尋寶與冒險明信片紀錄模型（含照片、塗鴉圖層、語音便條與當日旅伴快照） */
+    /** Phase 2/4 實境相機尋寶與冒險明信片紀錄模型（含照片、塗鴉圖層、語音便條、自然鑑定分類與旅伴快照） */
     static final class MemoryEntry {
         final String id;
         final String date;
@@ -169,6 +169,7 @@ final class StoryCatalog {
         final int companionStage;
         final boolean companionShiny;
         final int season;
+        final int natureCategory; // -1 表示未指定，0..7 對應 NatureVisionEngine.CATEGORIES
 
         MemoryEntry(
             String id,
@@ -180,7 +181,7 @@ final class StoryCatalog {
             int dominantHue,
             int stars
         ) {
-            this(id, date, title, squadLabel, photoPath, audioPath, "", "", 0, "", dominantHue, stars, 0L, 0, 1, false, 0);
+            this(id, date, title, squadLabel, photoPath, audioPath, "", "", 0, "", dominantHue, stars, 0L, 0, 1, false, 0, -1);
         }
 
         MemoryEntry(
@@ -202,6 +203,30 @@ final class StoryCatalog {
             boolean companionShiny,
             int season
         ) {
+            this(id, date, title, squadLabel, photoPath, audioPath, doodlePath, note, huntId, colorName,
+                dominantHue, stars, stepsOnDay, companionId, companionStage, companionShiny, season, -1);
+        }
+
+        MemoryEntry(
+            String id,
+            String date,
+            String title,
+            String squadLabel,
+            String photoPath,
+            String audioPath,
+            String doodlePath,
+            String note,
+            int huntId,
+            String colorName,
+            int dominantHue,
+            int stars,
+            long stepsOnDay,
+            int companionId,
+            int companionStage,
+            boolean companionShiny,
+            int season,
+            int natureCategory
+        ) {
             this.id = id != null ? id : "";
             this.date = date != null ? date : "";
             this.title = title != null ? title : "";
@@ -219,6 +244,8 @@ final class StoryCatalog {
             this.companionStage = Math.max(1, Math.min(3, companionStage));
             this.companionShiny = companionShiny;
             this.season = Math.max(0, Math.min(3, season));
+            this.natureCategory = (natureCategory >= 0 && natureCategory < NatureVisionEngine.CATEGORY_COUNT)
+                ? natureCategory : -1;
         }
     }
 

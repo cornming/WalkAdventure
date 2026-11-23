@@ -178,9 +178,13 @@ final class PostcardRenderer {
         c.drawText(starsSb.toString(), 112f, 1102f, p);
 
         String colorBadge = entry.colorName.isEmpty() ? "🌈 實境探索" : ("🌈 " + entry.colorName);
+        if (entry.natureCategory >= 0) {
+            NatureVisionEngine.CategoryDef nc = NatureVisionEngine.category(entry.natureCategory);
+            colorBadge += "  ·  " + nc.emoji + nc.badgeTitle;
+        }
         p.setColor(Color.rgb(46, 107, 52));
-        p.setTextSize(30f);
-        c.drawText(colorBadge, 270f, 1100f, p);
+        p.setTextSize(28f);
+        c.drawText(truncate(colorBadge, 24), 266f, 1100f, p);
 
         // 童言童語或回憶短句（自動兩行折行）
         String caption = entry.note.isEmpty() ? "今天牽著手一起發現了現實世界的驚喜！" : ("「" + entry.note + "」");

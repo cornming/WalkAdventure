@@ -147,6 +147,24 @@ final class MemoryMediaStore {
         return ColorScavenger.analyzeRgbPixels(pixels, targetColor);
     }
 
+    /** Phase 4 端側純 Java 自然生態影像鑑定（~96x96 空間＋色彩＋紋理分析，<20ms，100% 離線）。 */
+    NatureVisionEngine.Classification analyzeNaturePhoto(String photoFilename) {
+        File file = resolvePhotoFile(photoFilename);
+        if (file == null || !file.isFile()) {
+            return NatureVisionEngine.classifyPixels(null, 0, 0);
+        }
+        Bitmap sample = decodeBounded(file.getAbsolutePath(), SAMPLE_ANALYSIS_DIM);
+        if (sample == null) {
+            return NatureVisionEngine.classifyPixels(null, 0, 0);
+        }
+        int w = sample.getWidth();
+        int h = sample.getHeight();
+        int[] pixels = new int[w * h];
+        sample.getPixels(pixels, 0, w, 0, 0, w, h);
+        sample.recycle();
+        return NatureVisionEngine.classifyPixels(pixels, w, h);
+    }
+
     Bitmap loadPreviewBitmap(String photoFilename, int maxDim) {
         File file = resolvePhotoFile(photoFilename);
         if (file == null || !file.isFile()) return null;

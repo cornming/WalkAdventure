@@ -30,6 +30,9 @@ final class JournalTabController {
         void onStartPhotoHunt(int huntId);
         void onOpenHuntPicker();
         void onViewPostcard(StoryCatalog.MemoryEntry entry);
+        void onOpenTreasureHub();
+        void onOpenYearbook();
+        void onOpenNatureCategory(NatureVisionEngine.CategoryDef cat);
     }
 
     private final Context ctx;
@@ -57,7 +60,7 @@ final class JournalTabController {
             }), UiKit.cardMargins(ctx));
         }
 
-        // 1. 總覽與快速拍照尋寶按鈕
+        // 1. 總覽與快速拍照尋寶／年度長圖冊按鈕
         LinearLayout summaryCard = UiKit.makeSectionCard(ctx, UiKit.COLOR_CARD_GOLD);
         UiKit.addCardTitle(ctx, summaryCard, String.format(
             Locale.TAIWAN,
@@ -68,20 +71,45 @@ final class JournalTabController {
         ));
         UiKit.addCardSubtitle(ctx, summaryCard, String.format(
             Locale.TAIWAN,
-            "🌈 彩虹收集：%d / %d 色 · 📚 繪本 %d/%d · ✨ 異色 %d 位",
+            "🌈 彩虹 %d/%d · 🔬 自然百科 %d/%d · 🎁 實體尋寶 %d 次",
             state.rainbowCollectedCount(),
             ColorScavenger.RAINBOW_COUNT,
-            state.stories.completedArcCount(),
-            StoryCatalog.ARC_COUNT,
-            state.companions.shinyCount()
+            state.natureDex.unlockedCount(),
+            NatureVisionEngine.CATEGORY_COUNT,
+            state.treasure.totalTreasuresClaimed
         ));
         Button quickCameraBtn = UiKit.makeActionButton(ctx, UiKit.COLOR_ACCENT_FIRE, UiKit.COLOR_PRIMARY_TEXT);
-        quickCameraBtn.setText("📸 開啟相機尋寶・拍一張新明信片！");
+        quickCameraBtn.setText("📸 相機尋寶拍照");
         quickCameraBtn.setOnClickListener(v -> host.onOpenHuntPicker());
+
+        Button yearbookBtn = UiKit.makeActionButton(ctx, UiKit.COLOR_PRIMARY, UiKit.COLOR_PRIMARY_TEXT);
+        yearbookBtn.setText("📚 年度回憶長圖冊");
+        yearbookBtn.setOnClickListener(v -> host.onOpenYearbook());
+
+        LinearLayout topBtnRow = UiKit.makeButtonRow(ctx, quickCameraBtn, yearbookBtn);
         LinearLayout.LayoutParams qcLp = UiKit.matchWrap();
         qcLp.setMargins(0, UiKit.dp(ctx, 8), 0, 0);
-        summaryCard.addView(quickCameraBtn, qcLp);
+        summaryCard.addView(topBtnRow, qcLp);
         container.addView(summaryCard, UiKit.cardMargins(ctx));
+
+        // 1.5 Phase 3：NFC／離線 QR 實體藏寶盒入口卡（雨天在家與露營必玩！）
+        LinearLayout treasureCard = UiKit.makeSectionCard(ctx, Color.rgb(255, 238, 224));
+        UiKit.addCardTitle(ctx, treasureCard, String.format(
+            Locale.TAIWAN,
+            "🎁 實體藏寶盒（NFC 卡片／離線 QR · 待尋 %d 個）",
+            state.treasure.activeTreasureCount()
+        ));
+        UiKit.addCardSubtitle(ctx, treasureCard,
+            "拿閒置悠遊卡「嗶」一下或產生離線 QR 卡藏在家裡／公園，讓孩子看謎語尋寶開箱！");
+        Button treasureBtn = UiKit.makeActionButton(ctx, UiKit.COLOR_ACCENT_STAR, UiKit.COLOR_PRIMARY_TEXT);
+        treasureBtn.setText(state.treasure.activeTreasureCount() > 0
+            ? "📡 開啟尋寶雷達・大人藏寶工坊"
+            : "🕵️ 大人藏寶・設計一個實體謎語寶箱！");
+        treasureBtn.setOnClickListener(v -> host.onOpenTreasureHub());
+        LinearLayout.LayoutParams tLp = UiKit.matchWrap();
+        tLp.setMargins(0, UiKit.dp(ctx, 8), 0, 0);
+        treasureCard.addView(treasureBtn, tLp);
+        container.addView(treasureCard, UiKit.cardMargins(ctx));
 
         // 2. 現實世界彩虹七色收集冊
         UiKit.addSectionHeader(ctx, container, String.format(
@@ -129,6 +157,55 @@ final class JournalTabController {
             ? "🎉 已集滿全部七色彩虹！可以隨時繼續拍新明信片留念！"
             : "集滿七色現實世界照片，可獲頒 +100 金幣、+35 星砂與花瓣奇蹟蛋！");
         container.addView(rainbowCard, UiKit.cardMargins(ctx));
+
+        // 2.5 Phase 4：自然生態百科圖鑑（8 大類端側視覺自動鑑定）
+        UiKit.addSectionHeader(ctx, container, String.format(
+            Locale.TAIWAN,
+            "🔬 端側自然百科圖鑑（%d / %d 類 · 點擊看自然小知識）",
+            state.natureDex.unlockedCount(),
+            NatureVisionEngine.CATEGORY_COUNT
+        ));
+        LinearLayout dexCard = UiKit.makeSectionCard(ctx, UiKit.COLOR_CARD_BG);
+        for (int rowIdx = 0; rowIdx < 2; rowIdx++) {
+            LinearLayout gridRow = new LinearLayout(ctx);
+            gridRow.setOrientation(LinearLayout.HORIZONTAL);
+            for (int cIdx = 0; cIdx < 4; cIdx++) {
+                final NatureVisionEngine.CategoryDef cat = NatureVisionEngine.CATEGORIES[rowIdx * 4 + cIdx];
+                boolean got = state.natureDex.isUnlocked(cat.id);
+                LinearLayout tile = new LinearLayout(ctx);
+                tile.setOrientation(LinearLayout.VERTICAL);
+                tile.setGravity(Gravity.CENTER);
+                tile.setPadding(UiKit.dp(ctx, 4), UiKit.dp(ctx, 8), UiKit.dp(ctx, 4), UiKit.dp(ctx, 8));
+                GradientDrawable bg = new GradientDrawable();
+                bg.setCornerRadius(UiKit.dp(ctx, 12));
+                bg.setColor(got ? UiKit.COLOR_CARD_GREEN : UiKit.COLOR_CARD_MUTED);
+                bg.setStroke(UiKit.dp(ctx, 1), got ? cat.accentRgb : Color.rgb(220, 206, 186));
+                tile.setBackground(bg);
+                tile.setOnClickListener(v -> host.onOpenNatureCategory(cat));
+
+                TextView em = new TextView(ctx);
+                em.setText(got ? cat.emoji : "❔");
+                em.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+                em.setGravity(Gravity.CENTER);
+                tile.addView(em);
+
+                TextView nm = new TextView(ctx);
+                nm.setText(cat.name.substring(0, Math.min(4, cat.name.length())));
+                nm.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+                nm.setTextColor(got ? ctx.getColor(R.color.ink) : UiKit.COLOR_SUBTITLE);
+                nm.setGravity(Gravity.CENTER);
+                tile.addView(nm);
+
+                LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                tlp.setMargins(UiKit.dp(ctx, 3), UiKit.dp(ctx, 3), UiKit.dp(ctx, 3), UiKit.dp(ctx, 3));
+                gridRow.addView(tile, tlp);
+            }
+            dexCard.addView(gridRow, UiKit.matchWrap());
+        }
+        UiKit.addCardSubtitle(ctx, dexCard, state.natureDex.isComplete()
+            ? "🌟 恭喜集滿全部 8 大自然生態圖鑑！你們家就是最強小小自然學家！"
+            : "每次相機尋寶都會自動進行端側自然鑑定並加贈稀有素材，集滿 8 類送星光奇蹟蛋！");
+        container.addView(dexCard, UiKit.cardMargins(ctx));
 
         // 3. 回憶時光機（去年的今天 / 過往珍藏回顧）
         List<StoryCatalog.MemoryEntry> throwbacks = state.stories.findThrowbackMemories(today);
