@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <!-- 回憶畫廊小屋 -->
+    <path android:fillColor="#FFF1D6" android:pathData="M10,22 L38,22 L38,41 L10,41 Z" />
+    <path android:fillColor="#D65C7A" android:pathData="M6,23 L24,9 L42,23 Z" />
+    <!-- 門與明信片小畫框 -->
+    <path android:fillColor="#A46B46" android:pathData="M20,30 L28,30 L28,41 L20,41 Z" />
+    <path android:fillColor="#548FD6" android:pathData="M13,25 L18,25 L18,30 L13,30 Z" />
+    <path android:fillColor="#70AF74" android:pathData="M30,25 L35,25 L35,30 L30,30 Z" />
+    <path android:fillColor="#FFD15C" android:pathData="M24,14 A3,3 0 1,1 24,20 A3,3 0 1,1 24,14 Z" />
+</vector>

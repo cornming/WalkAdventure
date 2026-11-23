@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <!-- 木框花圃 -->
+    <path android:fillColor="#A46B46" android:pathData="M6,28 L42,28 L40,42 L8,42 Z" />
+    <path android:fillColor="#744B32" android:pathData="M9,30 L39,30 L38,37 L10,37 Z" />
+    <!-- 嫩芽與小花 -->
+    <path android:fillColor="#59A35F" android:pathData="M23,16 L25,16 L25,31 L23,31 Z" />
+    <path android:fillColor="#70AF74" android:pathData="M24,25 C17,24 14,19 16,15 C20,16 23,20 24,25 Z" />
+    <path android:fillColor="#70AF74" android:pathData="M24,23 C31,22 34,17 32,13 C28,14 25,18 24,23 Z" />
+    <path android:fillColor="#F5BF42" android:pathData="M24,9 C27,9 29,11 29,14 C29,17 27,19 24,19 C21,19 19,17 19,14 C19,11 21,9 24,9 Z" />
+    <path android:fillColor="#9A5B2C" android:pathData="M24,12 A2,2 0 1,1 24,16 A2,2 0 1,1 24,12 Z" />
+</vector>

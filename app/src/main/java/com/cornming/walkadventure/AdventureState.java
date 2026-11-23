@@ -41,6 +41,22 @@ final class AdventureState {
     final List<DailyRecord> dailyHistory = new ArrayList<>();
     final List<LogEntry> adventureLog = new ArrayList<>();
 
+    // Phase 1（v2.0）領域子系統
+    final FamilyProfile family = new FamilyProfile();
+    final CampfireVault vault = new CampfireVault();
+    final CompanionSystem companions = new CompanionSystem();
+    final CampState camp = new CampState();
+    final StoryCatalog stories = new StoryCatalog();
+
+    boolean pioneerBadge = false;
+    String migratedFrom = "";
+    int extraAchievementsMask = 0;
+    int campfireUnboxCount = 0;
+    int eggsHatchedCount = 0;
+    int gardenHarvestCount = 0;
+    String lastBirthdayGiftDate = "";
+    String lastPenguinSnackDate = "";
+
     static final class DailyRecord {
         final String date;
         long steps;
@@ -155,9 +171,51 @@ final class AdventureState {
         selectedBiomeIndex = (next == frontierBiomeIndex(progress)) ? -1 : next;
     }
 
+    int activeCompanionId() {
+        if (companions.equippedId != CompanionSystem.ID_NONE) {
+            return companions.equippedId;
+        }
+        return equippedCompanion;
+    }
+
+    String activeCompanionName() {
+        int id = activeCompanionId();
+        CompanionSystem.SpeciesDef sp = CompanionSystem.species(id);
+        if (sp != null) return sp.name;
+        return AdventureCatalog.companion(equippedCompanion).name;
+    }
+
+    void syncLegacyCompanionsIntoV2(String today) {
+        for (int legacyId = 1; legacyId < AdventureCatalog.COMPANION_COUNT; legacyId++) {
+            if (isCompanionUnlocked(legacyId)) {
+                companions.unlockDirect(legacyId, 0, false, today);
+            }
+        }
+        if (companions.equippedId == CompanionSystem.ID_NONE
+            && equippedCompanion > 0
+            && companions.isOwned(equippedCompanion)) {
+            companions.equippedId = equippedCompanion;
+        }
+        syncV2EquippedMirror();
+    }
+
+    void syncV2EquippedMirror() {
+        for (int legacyId = 1; legacyId < AdventureCatalog.COMPANION_COUNT; legacyId++) {
+            if (companions.isOwned(legacyId)) {
+                unlockedCompanionsMask |= (1 << legacyId);
+            }
+        }
+        if (companions.equippedId >= 0 && companions.equippedId < AdventureCatalog.COMPANION_COUNT) {
+            equippedCompanion = companions.equippedId;
+        }
+    }
+
     int xpMultiplierPercent() {
         int pct = bootsLevel * 10;
-        if (equippedCompanion == AdventureCatalog.COMPANION_DRAGON) pct += 20;
+        int cid = activeCompanionId();
+        if (cid == CompanionSystem.ID_DRAGON) {
+            pct += companions.isOwned(CompanionSystem.ID_DRAGON) ? companions.dragonXpBonusPercent() : 20;
+        }
         return pct;
     }
 
@@ -167,6 +225,7 @@ final class AdventureState {
 
     boolean isCompanionUnlocked(int companionId) {
         if (companionId == AdventureCatalog.COMPANION_NONE) return true;
+        if (companions.isOwned(companionId)) return true;
         if (companionId < 0 || companionId >= AdventureCatalog.COMPANION_COUNT) return false;
         return (unlockedCompanionsMask & (1 << companionId)) != 0;
     }
@@ -174,6 +233,11 @@ final class AdventureState {
     boolean isAchievementUnlocked(int index) {
         if (index < 0 || index >= AdventureCatalog.ACHIEVEMENT_COUNT) return false;
         return (unlockedAchievementsMask & (1 << index)) != 0;
+    }
+
+    boolean isExtraAchievementUnlocked(int index) {
+        if (index < 0 || index >= AdventureCatalog.EXTRA_ACHIEVEMENT_COUNT) return false;
+        return (extraAchievementsMask & (1 << index)) != 0;
     }
 
     boolean isDailyQuestClaimed(int questIndex, String today) {
@@ -365,6 +429,58 @@ final class AdventureState {
                 }
                 break;
 
+            case AdventureCatalog.ENCOUNTER_STORY:
+                pendingEncounter = null;
+                StoryCatalog.ArcDef arc = StoryCatalog.arc(stories.activeArcId);
+                StoryCatalog.ChapterDef ch = stories.currentStoryChapter();
+                boolean pickA = (choiceIndex == 0);
+                long baseStoryCoins = pickA ? ch.coinsA : ch.coinsB;
+                int baseStoryStar = pickA ? ch.starA : ch.starB;
+                int bondGain = pickA ? ch.bondA : ch.bondB;
+                gainedCoins = applyCoinBonuses(baseStoryCoins, bonusGoldPct, luckyCrit);
+                gainedXp = 60L + enc.biomeIndex * 10L;
+                int starTotal = baseStoryStar;
+                if (activeCompanionId() == CompanionSystem.ID_FOX && WorldClock.now().isNightOrDusk()) {
+                    starTotal *= 2;
+                }
+                camp.starSand += starTotal;
+                camp.wood += 2;
+                camp.petals += 1;
+                if (activeCompanionId() == CompanionSystem.ID_SQUIRREL) {
+                    camp.wood += 3;
+                    camp.petals += 2;
+                }
+                CompanionSystem.OwnedCompanion activeOc = companions.getOwned(activeCompanionId());
+                if (activeOc != null) {
+                    activeOc.addBondXp(bondGain);
+                }
+                boolean arcDone = stories.advanceStoryArc();
+                String eggBonusNote = "";
+                if (arcDone) {
+                    stories.unlockSeasonStamp(6); // 繪本讀者
+                    if (arc.rewardEggType >= 0) {
+                        if (companions.hasFreeEggSlot()) {
+                            companions.addEgg(arc.rewardEggType, enc.biomeIndex);
+                            eggBonusNote = " 獲得一顆「" + CompanionSystem.eggTypeDef(arc.rewardEggType).name + "」放入蛋巢！";
+                        } else {
+                            enqueueIntoVaultSafe(
+                                progress,
+                                CampfireVault.KIND_EGG,
+                                "故事獎勵：" + CompanionSystem.eggTypeDef(arc.rewardEggType).name,
+                                0,
+                                4,
+                                arc.rewardEggType,
+                                today
+                            );
+                            eggBonusNote = " 獲得神祕蛋並已存入營火盒！";
+                        }
+                    }
+                }
+                detail = "📖 " + (pickA ? ch.outcomeA : ch.outcomeB)
+                    + "（+" + gainedCoins + " 金幣、+" + starTotal + " 星砂"
+                    + (arcDone ? "，完成整本故事！" : "") + "）" + eggBonusNote;
+                break;
+
             case AdventureCatalog.ENCOUNTER_SHRINE:
             default:
                 pendingEncounter = null;
@@ -379,11 +495,19 @@ final class AdventureState {
         }
 
         if (enc.type != AdventureCatalog.ENCOUNTER_STARTER) {
-            if (equippedCompanion == AdventureCatalog.COMPANION_SLIME) {
-                gainedXp += 20;
+            int cid = activeCompanionId();
+            if (cid == CompanionSystem.ID_SLIME) {
+                gainedXp += companions.isOwned(CompanionSystem.ID_SLIME) ? companions.slimeEncounterBonusXp() : 20;
                 gainedCoins += 6;
-            } else if (equippedCompanion == AdventureCatalog.COMPANION_DRAGON) {
+            } else if (cid == CompanionSystem.ID_DRAGON) {
                 gainedCoins += 15;
+            } else if (cid == CompanionSystem.ID_SQUIRREL && enc.type != AdventureCatalog.ENCOUNTER_STORY) {
+                camp.wood += 2;
+                camp.petals += 2;
+            }
+            if (enc.type != AdventureCatalog.ENCOUNTER_STORY) {
+                CompanionSystem.OwnedCompanion oc = companions.getOwned(cid);
+                if (oc != null) oc.addBondXp(10);
             }
             encountersResolved++;
         }
@@ -396,6 +520,9 @@ final class AdventureState {
         rec.encounters++;
         appendLog(today, detail);
         evaluateAchievements(progress, today);
+        if (enc.type == AdventureCatalog.ENCOUNTER_STORY) {
+            evaluateExtraAchievements(progress, today);
+        }
         return new ActionResult(true, detail);
     }
 
@@ -431,6 +558,12 @@ final class AdventureState {
         AdventureCatalog.CompanionDef def = AdventureCatalog.companion(companionId);
         if (isCompanionUnlocked(companionId)) {
             equippedCompanion = companionId;
+            if (companionId == AdventureCatalog.COMPANION_NONE) {
+                companions.equippedId = CompanionSystem.ID_NONE;
+            } else {
+                companions.unlockDirect(companionId, 0, false, today);
+                companions.equippedId = companionId;
+            }
             return new ActionResult(
                 true,
                 companionId == AdventureCatalog.COMPANION_NONE
@@ -444,17 +577,28 @@ final class AdventureState {
         progress.coins -= def.cost;
         unlockedCompanionsMask |= (1 << companionId);
         equippedCompanion = companionId;
+        companions.unlockDirect(companionId, 0, false, today);
+        companions.equippedId = companionId;
         String msg = "🐾 成功招募夥伴「" + def.name + "」！";
         appendLog(today, msg);
         evaluateAchievements(progress, today);
         return new ActionResult(true, msg);
     }
 
+    ActionResult equipV2Companion(int companionId) {
+        ActionResult res = companions.equip(companionId);
+        if (res.ok) {
+            syncV2EquippedMirror();
+        }
+        return res;
+    }
+
     int dailyQuestCoinReward(int questIndex) {
         if (questIndex < 0 || questIndex >= AdventureCatalog.DAILY_QUEST_COUNT) return 0;
         int rewardCoins = AdventureCatalog.DAILY_QUESTS[questIndex].coinReward;
-        if (equippedCompanion == AdventureCatalog.COMPANION_OWL) {
-            rewardCoins = rewardCoins + (rewardCoins * 25) / 100;
+        if (activeCompanionId() == CompanionSystem.ID_OWL) {
+            int bonusPct = companions.isOwned(CompanionSystem.ID_OWL) ? companions.owlDailyQuestBonusPercent() : 25;
+            rewardCoins = rewardCoins + (rewardCoins * bonusPct) / 100;
         }
         return rewardCoins;
     }
@@ -480,6 +624,11 @@ final class AdventureState {
         int rewardCoins = dailyQuestCoinReward(questIndex);
         progress.coins += rewardCoins;
         addBonusXp(def.xpReward);
+        int starBonus = 4 + questIndex * 3;
+        if (activeCompanionId() == CompanionSystem.ID_OWL && WorldClock.now().isNightOrDusk()) {
+            starBonus += 5;
+        }
+        camp.starSand += starBonus;
         DailyRecord rec = ensureDailyRecord(today);
         rec.coinsEarned += rewardCoins;
         updateStreak(today, todaySteps);
@@ -494,7 +643,7 @@ final class AdventureState {
         if (progress == null) return 0;
         long totalChests = Math.max(0L, progress.claimedChest / StepProgress.STEPS_PER_CHEST);
         int maxBiome = highestUnlockedBiomeIndex(progress);
-        boolean hasCompanion = (unlockedCompanionsMask & ~1) != 0;
+        boolean hasCompanion = (unlockedCompanionsMask & ~1) != 0 || companions.ownedCount() > 0;
         int newlyUnlocked = 0;
 
         boolean[] conditions = {
@@ -523,6 +672,439 @@ final class AdventureState {
             }
         }
         return newlyUnlocked;
+    }
+
+    int evaluateExtraAchievements(StepProgress progress, String today) {
+        if (progress == null) return 0;
+        int newlyUnlocked = 0;
+        boolean[] conds = {
+            progress.lifetime >= 100_000L,
+            family.members.size() >= 2 && family.isFamilyMode(),
+            campfireUnboxCount >= 3,
+            eggsHatchedCount >= 1,
+            companions.ownedCount() >= 6,
+            companions.maxStageAchieved() >= 3,
+            camp.totalBuildingLevels() >= 10,
+            gardenHarvestCount >= 5,
+            stories.completedArcCount() >= 3,
+            stories.totalLookUpCompleted >= 5
+        };
+        for (int i = 0; i < AdventureCatalog.EXTRA_ACHIEVEMENTS.length; i++) {
+            if (!isExtraAchievementUnlocked(i) && conds[i]) {
+                extraAchievementsMask |= (1 << i);
+                AdventureCatalog.AchievementDef def = AdventureCatalog.EXTRA_ACHIEVEMENTS[i];
+                progress.coins += def.coinReward;
+                camp.starSand += 10;
+                if (today != null) {
+                    ensureDailyRecord(today).coinsEarned += def.coinReward;
+                    appendLog(today, "🌟 解鎖 2.0 成就「" + def.title + "」+" + def.coinReward + " 金幣、+10 星砂");
+                }
+                newlyUnlocked++;
+            }
+        }
+        return newlyUnlocked;
+    }
+
+    /** 啟動或換日時同步 2.0 環境狀態（四季護照、每日抬頭任務、家庭壽星禮包與企鵝連勝點心）。 */
+    String syncV2DailyEnvironment(StepProgress progress, WorldClock.Snapshot clock, Random random) {
+        if (progress == null || clock == null) return null;
+        String today = clock.isoDate;
+        stories.syncSeasonKey(clock);
+        stories.ensureDailyLookUpOffers(today, random);
+        if (progress.todayStepsOn(today) >= 1500L) {
+            stories.unlockSeasonStamp(0);
+        }
+        if (camp.totalBuildingLevels() >= 4) {
+            stories.unlockSeasonStamp(5);
+        }
+        StringBuilder notice = new StringBuilder();
+
+        String birthdayName = family.birthdayCelebrantName(clock);
+        if (!birthdayName.isEmpty() && !today.equals(lastBirthdayGiftDate)) {
+            lastBirthdayGiftDate = today;
+            progress.coins += 50L;
+            camp.starSand += 15;
+            camp.snacks += 2;
+            String bMsg = "🎂 祝「" + birthdayName + "」生日快樂！營地掛滿彩旗，送出 +50 金幣、+15 星砂與點心 ×2！";
+            appendLog(today, bMsg);
+            notice.append(bMsg);
+        }
+
+        if (activeCompanionId() == CompanionSystem.ID_PENGUIN
+            && effectiveStreak(today) >= 2
+            && !today.equals(lastPenguinSnackDate)) {
+            lastPenguinSnackDate = today;
+            camp.snacks += 1;
+            String pMsg = "🐧 企鵝嘟嘟為你的連勝歡呼！送出今日點心 ×1";
+            appendLog(today, pMsg);
+            if (notice.length() > 0) notice.append("\n");
+            notice.append(pMsg);
+        }
+
+        evaluateExtraAchievements(progress, today);
+        return notice.length() > 0 ? notice.toString() : null;
+    }
+
+    /**
+     * 2.0 感測器步數同步：
+     * 維持真實步數純粹不灌水，同時串聯營火盒鎖存、孵蛋推進、奇幻菜園自動澆水、島嶼巨獸進度、連貫故事奇遇與季節印章。
+     */
+    String applyWalkUpdateV2(
+        StepProgress progress,
+        StepProgress.Update walkUpdate,
+        WorldClock.Snapshot clock,
+        Random random
+    ) {
+        if (progress == null || walkUpdate == null || clock == null) return null;
+        String today = clock.isoDate;
+        Random rng = random != null ? random : new Random();
+        stories.syncSeasonKey(clock);
+        stories.ensureDailyLookUpOffers(today, rng);
+
+        long todaySteps = progress.todayStepsOn(today);
+        DailyRecord todayRecord = ensureDailyRecord(today);
+        todayRecord.steps = todaySteps;
+
+        StringBuilder notice = new StringBuilder();
+        if (walkUpdate.steps > 0) {
+            family.recordPocketSteps(walkUpdate.steps);
+
+            int xpBonusPct = xpMultiplierPercent();
+            long gainedExtraXp = (walkUpdate.steps * xpBonusPct) / 100L;
+            if (gainedExtraXp > 0) {
+                addBonusXp(gainedExtraXp);
+            }
+
+            // 推進孵蛋、菜園澆水、島嶼守護巨獸進度
+            int eggsReady = companions.advanceEggsByWalk(walkUpdate.steps);
+            int plotsReady = camp.waterGardensByWalk(walkUpdate.steps, activeCompanionId() == CompanionSystem.ID_SHEEP);
+            stories.advanceBossSteps(walkUpdate.steps, frontierBiomeIndex(progress));
+
+            if (clock.timeOfDay == WorldClock.TIME_DAWN || clock.isNightOrDusk()) {
+                stories.unlockSeasonStamp(7); // 星夜／清晨漫步
+            }
+            if (todaySteps >= 1500L) {
+                stories.unlockSeasonStamp(0); // 本季起走
+            }
+
+            if (eggsReady > 0) {
+                appendNotice(notice, "🥚 有 " + eggsReady + " 顆神祕蛋搖晃起來，可以去營地破殼囉！");
+            }
+            if (plotsReady > 0) {
+                appendNotice(notice, "🌻 奇幻菜園有 " + plotsReady + " 格作物成熟可以採收了！");
+            }
+        }
+
+        // 千步寶箱處理：平日開啟自動鎖存時，把寶箱收入營火盒等晚上與孩子一起開！
+        if (walkUpdate.chests > 0) {
+            long baseCoins = walkUpdate.chestCoins;
+            long charmExtra = (baseCoins * coinMultiplierPercent()) / 100L;
+            long shibaExtra = (activeCompanionId() == CompanionSystem.ID_SHIBA)
+                ? walkUpdate.chests * (long) companions.shibaChestBonusPerChest()
+                : 0L;
+            long totalChestCoins = baseCoins + charmExtra + shibaExtra;
+            int chestStars = walkUpdate.chests * 4;
+
+            boolean shouldVault = family.autoVaultBigRewards && !family.isFamilyMode();
+            if (shouldVault) {
+                // StepProgress.onSensorReading 已把 baseCoins 先加進 progress.coins，移入營火盒前先扣回避免重複發放
+                progress.coins = Math.max(0L, progress.coins - baseCoins);
+                enqueueIntoVaultSafe(
+                    progress,
+                    CampfireVault.KIND_CHEST,
+                    walkUpdate.chests == 1 ? "千步冒險寶箱" : ("千步冒險寶箱 ×" + walkUpdate.chests),
+                    (int) Math.min(Integer.MAX_VALUE, totalChestCoins),
+                    chestStars,
+                    -1,
+                    today
+                );
+                appendLog(today, "🔥 已將 " + walkUpdate.chests + " 個步數寶箱存入營火盒，留給晚上一起開箱！");
+                appendNotice(notice, "🔥 " + walkUpdate.chests + " 個步數寶箱已存進營火盒，回家跟家人一起開箱享加成！");
+            } else {
+                long extraCoins = charmExtra + shibaExtra;
+                progress.coins += extraCoins;
+                camp.starSand += chestStars;
+                todayRecord.coinsEarned += totalChestCoins;
+                appendLog(today, String.format(
+                    Locale.ROOT,
+                    "🎁 開啟 %d 個步數寶箱，獲得 %d 金幣、+%d 星砂",
+                    walkUpdate.chests,
+                    totalChestCoins,
+                    chestStars
+                ));
+                appendNotice(notice, walkUpdate.chests == 1
+                    ? "🎁 寶箱！獲得 " + totalChestCoins + " 金幣、+" + chestStars + " 星砂"
+                    : "🎁 寶箱 ×" + walkUpdate.chests + "！獲得 " + totalChestCoins + " 金幣、+" + chestStars + " 星砂");
+            }
+
+            // 寶箱里程碑掉落神祕蛋（約 40% 機率，或蛋巢全空時保底 70%）
+            int eggChance = companions.eggs.isEmpty() ? 70 : 40;
+            if (rng.nextInt(100) < eggChance) {
+                int eggType = CompanionSystem.pickEggTypeForContext(frontierBiomeIndex(progress), clock, rng);
+                String eggName = CompanionSystem.eggTypeDef(eggType).name;
+                if (shouldVault || !companions.hasFreeEggSlot()) {
+                    enqueueIntoVaultSafe(progress, CampfireVault.KIND_EGG, "撿到的" + eggName, 0, 3, eggType, today);
+                    appendNotice(notice, "🥚 路上撿到「" + eggName + "」，已放進營火盒！");
+                } else {
+                    companions.addEgg(eggType, frontierBiomeIndex(progress));
+                    appendNotice(notice, "🥚 路上撿到「" + eggName + "」，已放進孵蛋巢！");
+                }
+            }
+        }
+
+        updateStreak(today, todaySteps);
+
+        // 每 500 步奇遇：優先觸發多話連貫繪本故事（60%），其餘為經典奇遇
+        if (walkUpdate.event) {
+            if (pendingEncounter != null) {
+                ActionResult auto = resolvePendingEncounter(progress, 0, today, rng);
+                if (auto.ok && !auto.message.isEmpty()) {
+                    appendLog(today, "⏭️ 上個奇遇已自動結算：" + auto.message);
+                }
+            }
+            int biome = frontierBiomeIndex(progress);
+            if (rng.nextInt(100) < 60) {
+                StoryCatalog.ArcDef arc = StoryCatalog.arc(stories.activeArcId);
+                StoryCatalog.ChapterDef ch = stories.currentStoryChapter();
+                pendingEncounter = AdventureCatalog.createStoryEncounter(biome, arc, ch);
+            } else {
+                pendingEncounter = AdventureCatalog.generateEncounter(biome, compassLevel, rng);
+            }
+            appendNotice(notice, "❗ " + pendingEncounter.title);
+        }
+
+        int unlockedOld = evaluateAchievements(progress, today);
+        int unlockedNew = evaluateExtraAchievements(progress, today);
+        int totalUnlocked = unlockedOld + unlockedNew;
+        if (totalUnlocked > 0) {
+            appendNotice(notice, "🏆 解鎖 " + totalUnlocked + " 項新成就！");
+        }
+        return notice.length() > 0 ? notice.toString() : null;
+    }
+
+    private void enqueueIntoVaultSafe(
+        StepProgress progress,
+        String kind,
+        String title,
+        int coins,
+        int starSand,
+        int eggType,
+        String today
+    ) {
+        CampfireVault.VaultItem overflow = vault.enqueue(kind, title, coins, starSand, eggType, today);
+        if (overflow != null) {
+            progress.coins += overflow.coins;
+            camp.starSand += overflow.starSand;
+            if (overflow.eggType >= 0 && companions.hasFreeEggSlot()) {
+                companions.addEgg(overflow.eggType, 0);
+            } else if (overflow.eggType >= 0) {
+                camp.starSand += 10; // 蛋槽滿且溢出時折換星砂，絕不蒸發
+            }
+            appendLog(today, "🔥 營火盒已滿，自動結算最舊包裹「" + overflow.title + "」");
+        }
+    }
+
+    CampfireVault.OpenOutcome openVaultItem(StepProgress progress, String itemId, String today) {
+        if (progress == null) {
+            return new CampfireVault.OpenOutcome(false, 0, 0, false, "無法開箱");
+        }
+        CampfireVault.VaultItem target = null;
+        for (CampfireVault.VaultItem it : vault.items) {
+            if (it.id.equals(itemId)) {
+                target = it;
+                break;
+            }
+        }
+        if (target == null) {
+            return new CampfireVault.OpenOutcome(false, 0, 0, false, "這個營火包裹已經打開過了");
+        }
+        if (target.eggType >= 0 && !companions.hasFreeEggSlot()) {
+            return new CampfireVault.OpenOutcome(false, 0, 0, false, "孵蛋巢目前兩格都滿了，先去孵化一顆蛋再打開這顆蛋喔！");
+        }
+
+        vault.removeById(itemId);
+        int fireLv = camp.buildingLevel(CampState.BLD_CAMPFIRE);
+        boolean famMode = family.isFamilyMode();
+        boolean hasTortoise = (activeCompanionId() == CompanionSystem.ID_TORTOISE);
+
+        int finalCoins = CampfireVault.computeBonusCoins(target.coins, fireLv, famMode, hasTortoise);
+        int finalStars = CampfireVault.computeBonusStarSand(target.starSand, fireLv, famMode);
+        progress.coins += finalCoins;
+        camp.starSand += finalStars;
+
+        boolean eggPlaced = false;
+        if (target.eggType >= 0) {
+            eggPlaced = companions.addEgg(target.eggType, frontierBiomeIndex(progress));
+        }
+
+        campfireUnboxCount++;
+        stories.unlockSeasonStamp(2); // 暖心營火
+        DailyRecord rec = ensureDailyRecord(today);
+        rec.coinsEarned += finalCoins;
+
+        String bonusTag = famMode ? "（親子營火加成！）" : "";
+        String msg = eggPlaced
+            ? "🔥 打開「" + target.title + "」" + bonusTag + "！神祕蛋已放入孵蛋巢、星砂 +" + finalStars
+            : "🔥 打開「" + target.title + "」" + bonusTag + "！獲得 +" + finalCoins + " 金幣、+" + finalStars + " 星砂";
+        appendLog(today, msg);
+        evaluateExtraAchievements(progress, today);
+        return new CampfireVault.OpenOutcome(true, finalCoins, finalStars, eggPlaced, msg);
+    }
+
+    ActionResult completeLookUpQuest(StepProgress progress, int questId, String kidNote, String today) {
+        if (progress == null || today == null) {
+            return new ActionResult(false, "目前無法完成任務");
+        }
+        if (stories.isLookUpCompletedToday(questId, today)) {
+            return new ActionResult(false, "這張抬頭任務今天已經蓋章過囉！");
+        }
+        StoryCatalog.LookUpQuestDef def = StoryCatalog.lookUpQuestById(questId);
+        stories.lookUpDate = today;
+        stories.completedLookUpIds.add(questId);
+        stories.totalLookUpCompleted++;
+        stories.bossLookUpDone = true;
+
+        int gainedStar = def.starReward;
+        int gainedCoins = def.coinReward;
+        if (activeCompanionId() == CompanionSystem.ID_OTTER) {
+            gainedStar += 15;
+            CompanionSystem.OwnedCompanion oc = companions.getOwned(CompanionSystem.ID_OTTER);
+            if (oc != null) oc.addBondXp(25);
+        }
+        camp.starSand += gainedStar;
+        progress.coins += gainedCoins;
+        CompanionSystem.OwnedCompanion activeOc = companions.getOwned(activeCompanionId());
+        if (activeOc != null && activeCompanionId() != CompanionSystem.ID_OTTER) {
+            activeOc.addBondXp(18);
+        }
+
+        String squadLabel = family.formatActiveSquadLabel();
+        stories.recordNote(today, def.title, squadLabel, kidNote);
+        if (family.isFamilyMode() || family.members.size() >= 2) {
+            stories.unlockSeasonStamp(1); // 親子出動
+        }
+        DailyRecord rec = ensureDailyRecord(today);
+        rec.coinsEarned += gainedCoins;
+
+        String msg = "👀 完成抬頭任務「" + def.title + "」！+" + gainedCoins + " 金幣、+" + gainedStar + " 星砂";
+        appendLog(today, msg);
+        evaluateExtraAchievements(progress, today);
+        return new ActionResult(true, msg);
+    }
+
+    ActionResult calmIslandBoss(StepProgress progress, int biomeIndex, String today) {
+        if (progress == null) return new ActionResult(false, "無法挑戰巨獸");
+        StoryCatalog.BossDef boss = StoryCatalog.bossForBiome(biomeIndex);
+        if (stories.isBossCleared(biomeIndex)) {
+            return new ActionResult(false, "已經安撫過「" + boss.name + "」囉！");
+        }
+        if (!stories.canCalmCurrentBoss(biomeIndex)) {
+            int remain = Math.max(0, StoryCatalog.BOSS_REQUIRED_STEPS - stories.bossStepProgress);
+            return new ActionResult(false, "再走 " + remain + " 步或完成 1 張親子抬頭任務即可安撫牠！");
+        }
+
+        stories.bossClearedMask |= (1 << biomeIndex);
+        stories.bossStepProgress = 0;
+        stories.bossLookUpDone = false;
+
+        progress.coins += boss.rewardCoins;
+        camp.starSand += boss.rewardStarSand;
+        DailyRecord rec = ensureDailyRecord(today);
+        rec.coinsEarned += boss.rewardCoins;
+
+        String eggInfo;
+        if (companions.hasFreeEggSlot()) {
+            companions.addEgg(boss.rewardEggType, biomeIndex);
+            eggInfo = "並獲贈「" + CompanionSystem.eggTypeDef(boss.rewardEggType).name + "」放入孵蛋巢！";
+        } else {
+            enqueueIntoVaultSafe(
+                progress,
+                CampfireVault.KIND_BOSS_GIFT,
+                "巨獸謝禮：" + CompanionSystem.eggTypeDef(boss.rewardEggType).name,
+                0,
+                6,
+                boss.rewardEggType,
+                today
+            );
+            eggInfo = "獲贈的神祕蛋已收入營火盒！";
+        }
+        String msg = "🐲 成功安撫「" + boss.name + "」！+" + boss.rewardCoins + " 金幣、+" + boss.rewardStarSand + " 星砂，" + eggInfo;
+        appendLog(today, msg);
+        evaluateExtraAchievements(progress, today);
+        return new ActionResult(true, msg);
+    }
+
+    CompanionSystem.HatchResult hatchEgg(StepProgress progress, int eggListIndex, String today, Random random) {
+        CompanionSystem.HatchResult res = companions.hatchEgg(
+            eggListIndex,
+            camp.shinyBonusPercent(),
+            camp,
+            today,
+            random
+        );
+        if (res.ok) {
+            eggsHatchedCount++;
+            syncV2EquippedMirror();
+            stories.unlockSeasonStamp(3); // 破殼新生
+            appendLog(today, res.message);
+            evaluateAchievements(progress, today);
+            evaluateExtraAchievements(progress, today);
+        }
+        return res;
+    }
+
+    CampState.HarvestResult harvestGardenPlot(StepProgress progress, int slot, String today, Random random) {
+        boolean hasDeer = activeCompanionId() == CompanionSystem.ID_DEER;
+        CampState.HarvestResult res = camp.harvestPlot(slot, hasDeer, random);
+        if (res.ok) {
+            gardenHarvestCount++;
+            stories.unlockSeasonStamp(4); // 奇幻園丁
+            if (res.droppedEggType >= 0) {
+                if (companions.hasFreeEggSlot()) {
+                    companions.addEgg(res.droppedEggType, 0);
+                } else {
+                    enqueueIntoVaultSafe(progress, CampfireVault.KIND_EGG, "菜園花瓣神祕蛋", 0, 3, res.droppedEggType, today);
+                }
+            }
+            appendLog(today, res.message);
+            evaluateExtraAchievements(progress, today);
+        }
+        return res;
+    }
+
+    ActionResult upgradeCampBuilding(StepProgress progress, int buildingId, String today) {
+        ActionResult res = camp.upgradeBuilding(progress, buildingId);
+        if (res.ok) {
+            if (camp.totalBuildingLevels() >= 4) {
+                stories.unlockSeasonStamp(5); // 營地匠人
+            }
+            appendLog(today, res.message);
+            evaluateExtraAchievements(progress, today);
+        }
+        return res;
+    }
+
+    ActionResult petCompanionInCamp(StepProgress progress, int companionId, String today) {
+        ActionResult res = companions.petInCamp(companionId, camp.dailyPetBondXp(), today);
+        if (res.ok) {
+            evaluateExtraAchievements(progress, today);
+        }
+        return res;
+    }
+
+    ActionResult feedCompanion(StepProgress progress, int companionId, String today) {
+        ActionResult res = companions.feedSnack(companionId, camp);
+        if (res.ok) {
+            appendLog(today, res.message);
+            evaluateExtraAchievements(progress, today);
+        }
+        return res;
+    }
+
+    private static void appendNotice(StringBuilder sb, String line) {
+        if (line == null || line.isEmpty()) return;
+        if (sb.length() > 0) sb.append('\n');
+        sb.append(line);
     }
 
     int gearLevel(int gearIndex) {
@@ -631,28 +1213,32 @@ final class AdventureState {
             }
         }
         AdventureCatalog.BiomeDef biome = AdventureCatalog.biome(frontierBiomeIndex(progress));
-        AdventureCatalog.CompanionDef buddy = AdventureCatalog.companion(equippedCompanion);
+        String buddyName = activeCompanionName();
         long todaySteps = progress.todayStepsOn(safeToday);
         long todayCoins = todayRec != null ? todayRec.coinsEarned : 0L;
         int todayEnc = todayRec != null ? todayRec.encounters : 0;
         return String.format(
             Locale.TAIWAN,
             "【走走冒險 戰報｜%s】\n"
+                + "出隊小隊：%s（%s）\n"
                 + "Lv.%d %s（同伴：%s）\n"
                 + "目前區域：%s（累計探索 %d 格）\n"
                 + "今日步數：%d 步｜連續達標：%d 天\n"
-                + "今日收益：+%d 金幣、解決 %d 次奇遇｜持有金幣：%d",
+                + "今日收益：+%d 金幣、解決 %d 次奇遇｜持有金幣：%d｜星砂：%d",
             safeToday,
+            family.formatActiveSquadLabel(),
+            family.isFamilyMode() ? "親子出任務" : "平日模式",
             adventureLevel(progress),
             currentTitle(progress),
-            buddy.name,
+            buddyName,
             biome.name,
             exploredCells(progress),
             todaySteps,
             effectiveStreak(safeToday),
             todayCoins,
             todayEnc,
-            progress.coins
+            progress.coins,
+            camp.starSand
         );
     }
 
