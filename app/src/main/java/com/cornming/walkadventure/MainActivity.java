@@ -27,14 +27,18 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
-import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.time.LocalDate;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.Random;
 import java.util.concurrent.ExecutorService;
@@ -42,8 +46,9 @@ import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity implements SensorEventListener {
     private static final int REQ = 20;
+    private static final String V2_SAVE_FILENAME = "walk_adventure_v2.json";
 
-    // 冒險進度 SharedPreferences 欄位（隨雲端備份還原）。沿用 v0.1.0–v0.3.0 鍵名維持升級無縫接軌。
+    // 冒險進度 SharedPreferences 欄位（隨雲端備份還原）。沿用 v0.1.0–v0.4.0 鍵名維持升級無縫接軌。
     private static final String KEY_DAY = "day";
     private static final String KEY_LIFETIME = "lifetime";
     private static final String KEY_COINS = "coins";
@@ -51,7 +56,6 @@ public class MainActivity extends Activity implements SensorEventListener {
     private static final String KEY_EVENT_BUCKET = "event_bucket";
     private static final String KEY_TODAY = "today_steps";
 
-    // RPG 擴充欄位（同存於 walk_adventure）
     private static final String KEY_ADV_BONUS_XP = "adv_bonus_xp";
     private static final String KEY_ADV_BOOTS = "adv_boots";
     private static final String KEY_ADV_CHARM = "adv_charm";
@@ -88,8 +92,9 @@ public class MainActivity extends Activity implements SensorEventListener {
     private static final String KEY_DISMISSED_TAG = "update_dismissed_tag";
 
     private static final int TAB_ADVENTURE = 0;
-    private static final int TAB_SHOP = 1;
-    private static final int TAB_REPORT = 2;
+    private static final int TAB_CAMP = 1;
+    private static final int TAB_JOURNAL = 2;
+    private static final int TAB_SQUAD = 3;
 
     private static final int UPDATE_STATE_IDLE = 0;
     private static final int UPDATE_STATE_CHECKING = 1;
@@ -106,37 +111,59 @@ public class MainActivity extends Activity implements SensorEventListener {
     private AlertDialog activeDialog;
     private final Random random = new Random();
     private final ExecutorService updateExecutor = Executors.newSingleThreadExecutor();
-    private String currentVersion = "0.1.0";
+    private String currentVersion = "1.0.0";
     private AppUpdate.ReleaseInfo readyRelease;
     private boolean updateInFlight = false;
     private boolean pendingInstallAfterSettings = false;
 
     private int activeTab = TAB_ADVENTURE;
-    private String lastNoticeText = "準備出發！每 500 步觸發新奇遇，每 1,000 步開啟步數寶箱。";
+    private String lastNoticeText = "準備出發！平日累積進營火盒，假日一起開箱、孵蛋與探索！";
 
-    // UI 元件參照
+    // 頂部模式與口袋防低頭遮罩
+    private Button modeToggleBtn;
+    private Button pocketBtn;
+    private TextView topCurrencyText;
+    private LinearLayout pocketOverlay;
+    private TextView pocketStepsLabel;
+
+    // 4 分頁容器與控制器
     private ScrollView adventureScroll;
-    private ScrollView shopScroll;
-    private ScrollView reportScroll;
+    private ScrollView campScroll;
+    private ScrollView journalScroll;
+    private ScrollView squadScroll;
+    private LinearLayout campListContainer;
+    private LinearLayout journalListContainer;
+    private LinearLayout squadListContainer;
+    private CampTabController campController;
+    private JournalTabController journalController;
+    private SquadTabController squadController;
+
+    // 探險分頁動態區塊
     private AdventureCanvasView adventureCanvas;
     private LinearLayout biomeNavRow;
     private TextView biomeNavLabel;
     private Button biomePrevButton;
     private Button biomeNextButton;
+    private LinearLayout vaultBannerCard;
+    private TextView vaultBannerTitle;
+    private LinearLayout bossCard;
+    private TextView bossTitle;
+    private TextView bossBody;
+    private Button bossActionBtn;
     private LinearLayout encounterCard;
     private TextView encounterTitle;
     private TextView encounterBody;
     private LinearLayout encounterActionsRow;
     private Button encounterBtnPrimary;
     private Button encounterBtnSecondary;
+    private LinearLayout lookUpContainer;
     private TextView adventureFooterNote;
 
-    private LinearLayout shopListContainer;
-    private LinearLayout reportListContainer;
-
+    // 底部 4 分頁與自動更新列
     private Button tabBtnAdventure;
-    private Button tabBtnShop;
-    private Button tabBtnReport;
+    private Button tabBtnCamp;
+    private Button tabBtnJournal;
+    private Button tabBtnSquad;
     private Button updateButton;
 
     @Override public void onCreate(Bundle b) {
@@ -146,11 +173,21 @@ public class MainActivity extends Activity implements SensorEventListener {
         progress = loadProgress();
         adventure = loadAdventureState();
 
-        String todayStr = today();
+        WorldClock.Snapshot clock = WorldClock.now();
+        String todayStr = clock.isoDate;
         adventure.syncSnapshot(progress, todayStr);
+        boolean hadV2File = loadV2StateFile(adventure);
+        SaveCodec.MigrationResult migration = SaveCodec.migrateIfNeeded(progress, adventure, hadV2File, todayStr);
+
         boolean starterCreated = adventure.ensureStarterEncounter(todayStr);
+        String envNotice = adventure.syncV2DailyEnvironment(progress, clock, random);
         saveProgress();
-        if (starterCreated) {
+
+        if (migration.migrated && !migration.welcomeMessage.isEmpty()) {
+            lastNoticeText = migration.welcomeMessage;
+        } else if (envNotice != null) {
+            lastNoticeText = envNotice;
+        } else if (starterCreated) {
             lastNoticeText = "村長準備了出發補給包！點擊下方按鈕即可領取獎勵。";
         }
 
@@ -158,7 +195,12 @@ public class MainActivity extends Activity implements SensorEventListener {
         sensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);
         stepSensor = sensorManager != null ? sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) : null;
 
+        initControllers();
         buildLayout();
+
+        if (migration.migrated && migration.wasVeteran) {
+            showMigrationWelcomeDialog(migration.welcomeMessage);
+        }
 
         if (stepSensor != null && !hasStepPermission() && !devicePrefs.getBoolean(KEY_PERMISSION_REQUESTED, false)) {
             requestStepPermission();
@@ -171,11 +213,71 @@ public class MainActivity extends Activity implements SensorEventListener {
         }
     }
 
+    private void initControllers() {
+        campController = new CampTabController(this, new CampTabController.Host() {
+            @Override public void onStateChanged(String toastMessage) {
+                commitAndRefresh(toastMessage);
+            }
+
+            @Override public void onOpenCampfireDialog() {
+                showCampfireUnboxDialog();
+            }
+
+            @Override public void onHatchEggRequested(int eggListIndex) {
+                CompanionSystem.HatchResult res = adventure.hatchEgg(progress, eggListIndex, WorldClock.now().isoDate, random);
+                commitAndRefresh(res.message);
+            }
+
+            @Override public void onHarvestGardenRequested(int slot) {
+                CampState.HarvestResult res = adventure.harvestGardenPlot(progress, slot, WorldClock.now().isoDate, random);
+                commitAndRefresh(res.message);
+            }
+
+            @Override public void onCompanionPetted(int companionId) {
+                AdventureState.ActionResult res = adventure.petCompanionInCamp(progress, companionId, WorldClock.now().isoDate);
+                commitAndRefresh(res.message);
+            }
+        });
+
+        journalController = new JournalTabController(this, this::commitAndRefresh);
+
+        squadController = new SquadTabController(this, new SquadTabController.Host() {
+            @Override public void onStateChanged(String toastMessage) {
+                commitAndRefresh(toastMessage);
+            }
+
+            @Override public void onCopyReportRequested() {
+                copyDailyReportToClipboard(WorldClock.now().isoDate);
+            }
+
+            @Override public void onBackupRestored(String rawJson) {
+                AdventureState candidate = loadAdventureState();
+                if (!SaveCodec.deserializeInto(rawJson, candidate)) {
+                    showShortToast("備份格式無效，未變更現有存檔");
+                    return;
+                }
+                SaveCodec.deserializeInto(rawJson, adventure);
+                commitAndRefresh("已成功還原 2.0 營地備份資料！");
+            }
+        });
+    }
+
+    private void commitAndRefresh(String message) {
+        if (message != null && !message.isEmpty()) {
+            lastNoticeText = message;
+            showShortToast(message);
+        }
+        saveProgress();
+        refreshAllTabs();
+    }
+
     private void buildLayout() {
+        FrameLayout frame = new FrameLayout(this);
+        frame.setBackgroundColor(getColor(R.color.bg));
+
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(getColor(R.color.bg));
-        // 狀態列、導覽列與瀏海邊界統一由 root 保留
         root.setOnApplyWindowInsetsListener((v, insets) -> {
             if (Build.VERSION.SDK_INT >= 30) {
                 android.graphics.Insets bars = insets.getInsets(
@@ -193,89 +295,178 @@ public class MainActivity extends Activity implements SensorEventListener {
             return insets.consumeSystemWindowInsets();
         });
 
+        // 頂部雙模式切換與雙幣狀態列
+        root.addView(buildTopModeBar(), UiKit.matchWrap());
+
+        // 中間 4 分頁主內容區
         FrameLayout contentHost = new FrameLayout(this);
         adventureScroll = buildAdventureTab();
-        shopScroll = buildScrollListTab(true);
-        reportScroll = buildScrollListTab(false);
+        campScroll = buildListScroll(TAB_CAMP);
+        journalScroll = buildListScroll(TAB_JOURNAL);
+        squadScroll = buildListScroll(TAB_SQUAD);
         contentHost.addView(adventureScroll);
-        contentHost.addView(shopScroll);
-        contentHost.addView(reportScroll);
-
+        contentHost.addView(campScroll);
+        contentHost.addView(journalScroll);
+        contentHost.addView(squadScroll);
         root.addView(contentHost, new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            0,
-            1f
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
         ));
 
         View tabDivider = new View(this);
         tabDivider.setBackgroundColor(Color.rgb(231, 216, 194));
         root.addView(tabDivider, new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            Math.max(1, dp(1))
+            ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, UiKit.dp(this, 1))
         ));
 
-        // 底部三分頁切換列
+        // 底部 4 分頁導覽列
         LinearLayout tabBar = new LinearLayout(this);
         tabBar.setOrientation(LinearLayout.HORIZONTAL);
-        tabBar.setPadding(dp(12), dp(6), dp(12), dp(4));
+        tabBar.setPadding(UiKit.dp(this, 8), UiKit.dp(this, 6), UiKit.dp(this, 8), UiKit.dp(this, 4));
         tabBar.setGravity(Gravity.CENTER);
 
         tabBtnAdventure = makeNavTabButton(R.string.tab_adventure, TAB_ADVENTURE);
-        tabBtnShop = makeNavTabButton(R.string.tab_shop, TAB_SHOP);
-        tabBtnReport = makeNavTabButton(R.string.tab_report, TAB_REPORT);
+        tabBtnCamp = makeNavTabButton(R.string.tab_camp, TAB_CAMP);
+        tabBtnJournal = makeNavTabButton(R.string.tab_journal, TAB_JOURNAL);
+        tabBtnSquad = makeNavTabButton(R.string.tab_squad, TAB_SQUAD);
 
-        LinearLayout.LayoutParams tabLp = new LinearLayout.LayoutParams(
-            0,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            1f
-        );
-        tabLp.setMargins(dp(4), 0, dp(4), 0);
+        LinearLayout.LayoutParams tabLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        tabLp.setMargins(UiKit.dp(this, 3), 0, UiKit.dp(this, 3), 0);
         tabBar.addView(tabBtnAdventure, tabLp);
-        tabBar.addView(tabBtnShop, new LinearLayout.LayoutParams(tabLp));
-        tabBar.addView(tabBtnReport, new LinearLayout.LayoutParams(tabLp));
-        root.addView(tabBar, new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        ));
+        tabBar.addView(tabBtnCamp, new LinearLayout.LayoutParams(tabLp));
+        tabBar.addView(tabBtnJournal, new LinearLayout.LayoutParams(tabLp));
+        tabBar.addView(tabBtnSquad, new LinearLayout.LayoutParams(tabLp));
+        root.addView(tabBar, UiKit.matchWrap());
 
         // 精簡版本與自動更新列
         LinearLayout updateFooter = new LinearLayout(this);
         updateFooter.setOrientation(LinearLayout.HORIZONTAL);
         updateFooter.setGravity(Gravity.CENTER_VERTICAL);
-        updateFooter.setPadding(dp(16), dp(2), dp(16), dp(6));
+        updateFooter.setPadding(UiKit.dp(this, 16), UiKit.dp(this, 2), UiKit.dp(this, 16), UiKit.dp(this, 6));
 
         TextView versionText = new TextView(this);
         versionText.setText(getString(R.string.version_label, currentVersion));
         versionText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         versionText.setTextColor(Color.rgb(122, 100, 82));
-        updateFooter.addView(versionText, new LinearLayout.LayoutParams(
-            0,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            1f
-        ));
+        updateFooter.addView(versionText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         updateButton = new Button(this);
         updateButton.setAllCaps(false);
         updateButton.setStateListAnimator(null);
-        updateButton.setMinHeight(dp(44));
-        updateButton.setMinWidth(dp(88));
-        updateButton.setPadding(dp(14), dp(6), dp(14), dp(6));
-        updateButton.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        updateButton.setMinHeight(UiKit.dp(this, 40));
+        updateButton.setMinWidth(UiKit.dp(this, 84));
+        updateButton.setPadding(UiKit.dp(this, 12), UiKit.dp(this, 5), UiKit.dp(this, 12), UiKit.dp(this, 5));
+        updateButton.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
         updateButton.setTypeface(Typeface.create("sans", Typeface.BOLD));
         updateButton.setOnClickListener(v -> onUpdateButtonClicked());
         updateFooter.addView(updateButton, new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+        root.addView(updateFooter, UiKit.matchWrap());
+
+        frame.addView(root, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         ));
 
-        root.addView(updateFooter, new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
+        // 口袋探險模式防低頭全螢幕遮罩
+        pocketOverlay = buildPocketOverlay();
+        frame.addView(pocketOverlay, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         ));
 
-        setContentView(root);
+        setContentView(frame);
         renderUpdateButton(UPDATE_STATE_IDLE);
         switchTab(TAB_ADVENTURE);
+    }
+
+    private LinearLayout buildTopModeBar() {
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(UiKit.dp(this, 12), UiKit.dp(this, 6), UiKit.dp(this, 12), UiKit.dp(this, 6));
+        bar.setBackgroundColor(Color.rgb(252, 240, 218));
+
+        modeToggleBtn = UiKit.makeSmallPillButton(this, "☀️ 平日模式", UiKit.COLOR_WARM_BTN, getColor(R.color.ink));
+        modeToggleBtn.setOnClickListener(v -> {
+            adventure.family.toggleMode();
+            adventure.evaluateExtraAchievements(progress, WorldClock.now().isoDate);
+            String msg = adventure.family.isFamilyMode()
+                ? "🎈 已切換「親子出任務模式」！營火開箱享額外加成，快看今日抬頭任務！"
+                : "☀️ 已切換「平日累積模式」，寶箱可自動存進營火盒留給晚上！";
+            commitAndRefresh(msg);
+        });
+        bar.addView(modeToggleBtn);
+
+        pocketBtn = UiKit.makeSmallPillButton(this, "🎒 口袋", UiKit.COLOR_CARD_BG, getColor(R.color.ink));
+        LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        pLp.setMargins(UiKit.dp(this, 6), 0, UiKit.dp(this, 6), 0);
+        pocketBtn.setOnClickListener(v -> {
+            adventure.family.startPocketMode();
+            saveProgress();
+            refreshPocketOverlay();
+        });
+        bar.addView(pocketBtn, pLp);
+
+        topCurrencyText = new TextView(this);
+        topCurrencyText.setGravity(Gravity.END);
+        topCurrencyText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        topCurrencyText.setTypeface(Typeface.create("sans", Typeface.BOLD));
+        topCurrencyText.setTextColor(getColor(R.color.ink));
+        bar.addView(topCurrencyText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        return bar;
+    }
+
+    private LinearLayout buildPocketOverlay() {
+        LinearLayout overlay = new LinearLayout(this);
+        overlay.setOrientation(LinearLayout.VERTICAL);
+        overlay.setGravity(Gravity.CENTER);
+        overlay.setBackgroundColor(Color.argb(244, 42, 54, 44));
+        overlay.setPadding(UiKit.dp(this, 28), UiKit.dp(this, 36), UiKit.dp(this, 28), UiKit.dp(this, 36));
+        overlay.setClickable(true);
+
+        TextView icon = new TextView(this);
+        icon.setText("🎒🌿");
+        icon.setTextSize(TypedValue.COMPLEX_UNIT_SP, 44);
+        icon.setGravity(Gravity.CENTER);
+        overlay.addView(icon);
+
+        TextView title = new TextView(this);
+        title.setText("口袋探險模式運作中");
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
+        title.setTypeface(Typeface.create("sans", Typeface.BOLD));
+        title.setTextColor(Color.rgb(255, 247, 232));
+        title.setGravity(Gravity.CENTER);
+        title.setPadding(0, UiKit.dp(this, 12), 0, UiKit.dp(this, 8));
+        overlay.addView(title);
+
+        TextView subtitle = new TextView(this);
+        subtitle.setText("現在把手機安心收進口袋，抬頭牽手看風景！\n路上所有步數、孵蛋、澆水與寶箱都會自動收進背包。");
+        subtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        subtitle.setTextColor(Color.rgb(220, 234, 218));
+        subtitle.setGravity(Gravity.CENTER);
+        overlay.addView(subtitle);
+
+        pocketStepsLabel = new TextView(this);
+        pocketStepsLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        pocketStepsLabel.setTypeface(Typeface.create("sans", Typeface.BOLD));
+        pocketStepsLabel.setTextColor(Color.rgb(255, 224, 120));
+        pocketStepsLabel.setGravity(Gravity.CENTER);
+        pocketStepsLabel.setPadding(0, UiKit.dp(this, 20), 0, UiKit.dp(this, 24));
+        overlay.addView(pocketStepsLabel);
+
+        Button exitBtn = UiKit.makeActionButton(this, Color.rgb(245, 191, 66), getColor(R.color.ink));
+        exitBtn.setText("✨ 抵達休息點！打開口袋看收穫");
+        exitBtn.setOnClickListener(v -> {
+            long walked = adventure.family.finishPocketMode();
+            String msg = walked > 0
+                ? String.format(Locale.TAIWAN, "🎉 剛剛口袋散步一共累積 %d 步！看看收穫吧！", walked)
+                : "已結束口袋探險模式";
+            commitAndRefresh(msg);
+        });
+        overlay.addView(exitBtn, UiKit.matchWrap());
+        overlay.setVisibility(View.GONE);
+        return overlay;
     }
 
     private ScrollView buildAdventureTab() {
@@ -283,97 +474,94 @@ public class MainActivity extends Activity implements SensorEventListener {
         scroll.setFillViewport(true);
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
-        col.setPadding(0, 0, 0, dp(10));
+        col.setPadding(0, 0, 0, UiKit.dp(this, 12));
 
         adventureCanvas = new AdventureCanvasView(this);
         adventureCanvas.setOnClickListener(v -> {
             if (!hasStepPermission()) handlePermissionTap();
         });
-        col.addView(adventureCanvas, new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        ));
+        col.addView(adventureCanvas, UiKit.matchWrap());
 
-        // 區域切換列（解鎖第 2 章以上才顯示）
+        // 區域切換列
         biomeNavRow = new LinearLayout(this);
         biomeNavRow.setOrientation(LinearLayout.HORIZONTAL);
         biomeNavRow.setGravity(Gravity.CENTER_VERTICAL);
-        biomeNavRow.setPadding(dp(16), dp(2), dp(16), dp(6));
+        biomeNavRow.setPadding(UiKit.dp(this, 16), UiKit.dp(this, 2), UiKit.dp(this, 16), UiKit.dp(this, 6));
 
-        biomePrevButton = makeSmallPillButton(getString(R.string.biome_prev), Color.rgb(245, 232, 208), getColor(R.color.ink));
+        biomePrevButton = UiKit.makeSmallPillButton(this, getString(R.string.biome_prev), Color.rgb(245, 232, 208), getColor(R.color.ink));
         biomePrevButton.setOnClickListener(v -> {
             adventure.shiftDisplayBiome(progress, -1);
             saveProgress();
             refreshAllTabs();
         });
-
         biomeNavLabel = new TextView(this);
         biomeNavLabel.setGravity(Gravity.CENTER);
         biomeNavLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         biomeNavLabel.setTypeface(Typeface.create("sans", Typeface.BOLD));
         biomeNavLabel.setTextColor(getColor(R.color.ink));
-
-        biomeNextButton = makeSmallPillButton(getString(R.string.biome_next), Color.rgb(245, 232, 208), getColor(R.color.ink));
+        biomeNextButton = UiKit.makeSmallPillButton(this, getString(R.string.biome_next), Color.rgb(245, 232, 208), getColor(R.color.ink));
         biomeNextButton.setOnClickListener(v -> {
             adventure.shiftDisplayBiome(progress, 1);
             saveProgress();
             refreshAllTabs();
         });
-
         biomeNavRow.addView(biomePrevButton);
         biomeNavRow.addView(biomeNavLabel, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         biomeNavRow.addView(biomeNextButton);
         col.addView(biomeNavRow);
 
-        // 互動奇遇卡片
+        // 營火開箱提醒橫幅
+        vaultBannerCard = UiKit.makeSectionCard(this, Color.rgb(255, 232, 208));
+        vaultBannerTitle = UiKit.addCardTitle(this, vaultBannerCard, "");
+        Button openVaultBtn = UiKit.makeActionButton(this, UiKit.COLOR_ACCENT_FIRE, UiKit.COLOR_PRIMARY_TEXT);
+        openVaultBtn.setText("🔥 點燃營火・和家人一起開箱！");
+        openVaultBtn.setOnClickListener(v -> showCampfireUnboxDialog());
+        LinearLayout.LayoutParams vBtnLp = UiKit.matchWrap();
+        vBtnLp.setMargins(0, UiKit.dp(this, 6), 0, 0);
+        vaultBannerCard.addView(openVaultBtn, vBtnLp);
+        LinearLayout.LayoutParams hCardLp = UiKit.matchWrap();
+        hCardLp.setMargins(UiKit.dp(this, 16), UiKit.dp(this, 4), UiKit.dp(this, 16), UiKit.dp(this, 6));
+        col.addView(vaultBannerCard, hCardLp);
+
+        // 島嶼守護巨獸試煉卡
+        bossCard = UiKit.makeSectionCard(this, Color.rgb(240, 236, 255));
+        bossTitle = UiKit.addCardTitle(this, bossCard, "");
+        bossBody = UiKit.addCardSubtitle(this, bossCard, "");
+        bossActionBtn = UiKit.makeActionButton(this, UiKit.COLOR_ACCENT_STAR, UiKit.COLOR_PRIMARY_TEXT);
+        bossActionBtn.setOnClickListener(v -> {
+            int biomeIdx = adventure.frontierBiomeIndex(progress);
+            AdventureState.ActionResult r = adventure.calmIslandBoss(progress, biomeIdx, WorldClock.now().isoDate);
+            commitAndRefresh(r.message);
+        });
+        LinearLayout.LayoutParams bBtnLp = UiKit.matchWrap();
+        bBtnLp.setMargins(0, UiKit.dp(this, 6), 0, 0);
+        bossCard.addView(bossActionBtn, bBtnLp);
+        col.addView(bossCard, new LinearLayout.LayoutParams(hCardLp));
+
+        // 連貫故事／互動奇遇卡片
         encounterCard = new LinearLayout(this);
         encounterCard.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        cardLp.setMargins(dp(16), dp(4), dp(16), dp(6));
-        encounterCard.setPadding(dp(14), dp(12), dp(14), dp(12));
+        encounterCard.setPadding(UiKit.dp(this, 14), UiKit.dp(this, 12), UiKit.dp(this, 14), UiKit.dp(this, 12));
+        encounterTitle = UiKit.addCardTitle(this, encounterCard, "");
+        encounterBody = UiKit.addCardSubtitle(this, encounterCard, "");
+        encounterBody.setPadding(0, UiKit.dp(this, 4), 0, UiKit.dp(this, 8));
 
-        encounterTitle = new TextView(this);
-        encounterTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-        encounterTitle.setTypeface(Typeface.create("sans", Typeface.BOLD));
-        encounterTitle.setTextColor(getColor(R.color.ink));
-        encounterCard.addView(encounterTitle);
-
-        encounterBody = new TextView(this);
-        encounterBody.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        encounterBody.setTextColor(Color.rgb(92, 72, 56));
-        encounterBody.setPadding(0, dp(4), 0, dp(8));
-        encounterCard.addView(encounterBody);
-
-        encounterActionsRow = new LinearLayout(this);
-        encounterActionsRow.setOrientation(LinearLayout.HORIZONTAL);
-        encounterBtnPrimary = makeActionButton(Color.rgb(46, 107, 52), Color.rgb(255, 247, 232));
+        encounterBtnPrimary = UiKit.makeActionButton(this, UiKit.COLOR_PRIMARY, UiKit.COLOR_PRIMARY_TEXT);
         encounterBtnPrimary.setOnClickListener(v -> onEncounterChoice(0));
-        encounterBtnSecondary = makeActionButton(Color.rgb(255, 225, 170), getColor(R.color.ink));
+        encounterBtnSecondary = UiKit.makeActionButton(this, UiKit.COLOR_WARM_BTN, getColor(R.color.ink));
         encounterBtnSecondary.setOnClickListener(v -> onEncounterChoice(1));
+        encounterActionsRow = UiKit.makeButtonRow(this, encounterBtnPrimary, encounterBtnSecondary);
+        encounterCard.addView(encounterActionsRow, UiKit.matchWrap());
+        col.addView(encounterCard, new LinearLayout.LayoutParams(hCardLp));
 
-        LinearLayout.LayoutParams actLp = new LinearLayout.LayoutParams(
-            0,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            1f
-        );
-        actLp.setMargins(0, 0, dp(6), 0);
-        LinearLayout.LayoutParams actLpRight = new LinearLayout.LayoutParams(
-            0,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            1f
-        );
-        actLpRight.setMargins(dp(6), 0, 0, 0);
-        encounterActionsRow.addView(encounterBtnPrimary, actLp);
-        encounterActionsRow.addView(encounterBtnSecondary, actLpRight);
-        encounterCard.addView(encounterActionsRow);
-
-        col.addView(encounterCard, cardLp);
+        // 親子抬頭任務區
+        lookUpContainer = new LinearLayout(this);
+        lookUpContainer.setOrientation(LinearLayout.VERTICAL);
+        lookUpContainer.setPadding(UiKit.dp(this, 16), UiKit.dp(this, 4), UiKit.dp(this, 16), UiKit.dp(this, 4));
+        col.addView(lookUpContainer, UiKit.matchWrap());
 
         adventureFooterNote = new TextView(this);
-        adventureFooterNote.setPadding(dp(18), dp(2), dp(18), dp(6));
+        adventureFooterNote.setPadding(UiKit.dp(this, 18), UiKit.dp(this, 4), UiKit.dp(this, 18), UiKit.dp(this, 6));
         adventureFooterNote.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         adventureFooterNote.setTypeface(Typeface.create("sans", Typeface.BOLD));
         adventureFooterNote.setTextColor(Color.rgb(110, 90, 76));
@@ -383,17 +571,15 @@ public class MainActivity extends Activity implements SensorEventListener {
         return scroll;
     }
 
-    private ScrollView buildScrollListTab(boolean isShop) {
+    private ScrollView buildListScroll(int tab) {
         ScrollView scroll = new ScrollView(this);
         LinearLayout list = new LinearLayout(this);
         list.setOrientation(LinearLayout.VERTICAL);
-        list.setPadding(dp(16), dp(12), dp(16), dp(16));
+        list.setPadding(UiKit.dp(this, 14), UiKit.dp(this, 10), UiKit.dp(this, 14), UiKit.dp(this, 16));
         scroll.addView(list);
-        if (isShop) {
-            shopListContainer = list;
-        } else {
-            reportListContainer = list;
-        }
+        if (tab == TAB_CAMP) campListContainer = list;
+        else if (tab == TAB_JOURNAL) journalListContainer = list;
+        else squadListContainer = list;
         return scroll;
     }
 
@@ -401,102 +587,100 @@ public class MainActivity extends Activity implements SensorEventListener {
         Button btn = new Button(this);
         btn.setAllCaps(false);
         btn.setStateListAnimator(null);
-        btn.setMinHeight(dp(48));
-        btn.setPadding(dp(8), dp(8), dp(8), dp(8));
-        btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        btn.setMinHeight(UiKit.dp(this, 46));
+        btn.setPadding(UiKit.dp(this, 4), UiKit.dp(this, 6), UiKit.dp(this, 4), UiKit.dp(this, 6));
+        btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         btn.setTypeface(Typeface.create("sans", Typeface.BOLD));
         btn.setText(stringResId);
         btn.setOnClickListener(v -> switchTab(tabIndex));
         return btn;
     }
 
-    private Button makeSmallPillButton(String text, int bgColor, int fgColor) {
-        Button btn = new Button(this);
-        btn.setAllCaps(false);
-        btn.setStateListAnimator(null);
-        btn.setMinHeight(dp(44));
-        btn.setPadding(dp(12), dp(6), dp(12), dp(6));
-        btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        btn.setTypeface(Typeface.create("sans", Typeface.BOLD));
-        btn.setTextColor(fgColor);
-        btn.setText(text);
-        GradientDrawable d = new GradientDrawable();
-        d.setColor(bgColor);
-        d.setCornerRadius(dp(18));
-        btn.setBackground(d);
-        return btn;
-    }
-
-    private Button makeActionButton(int bgColor, int fgColor) {
-        Button btn = new Button(this);
-        btn.setAllCaps(false);
-        btn.setStateListAnimator(null);
-        btn.setMinHeight(dp(48));
-        btn.setPadding(dp(10), dp(10), dp(10), dp(10));
-        btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        btn.setTypeface(Typeface.create("sans", Typeface.BOLD));
-        btn.setTextColor(fgColor);
-        GradientDrawable d = new GradientDrawable();
-        d.setColor(bgColor);
-        d.setCornerRadius(dp(14));
-        btn.setBackground(d);
-        return btn;
-    }
-
     private void switchTab(int target) {
         activeTab = target;
         adventureScroll.setVisibility(target == TAB_ADVENTURE ? View.VISIBLE : View.GONE);
-        shopScroll.setVisibility(target == TAB_SHOP ? View.VISIBLE : View.GONE);
-        reportScroll.setVisibility(target == TAB_REPORT ? View.VISIBLE : View.GONE);
+        campScroll.setVisibility(target == TAB_CAMP ? View.VISIBLE : View.GONE);
+        journalScroll.setVisibility(target == TAB_JOURNAL ? View.VISIBLE : View.GONE);
+        squadScroll.setVisibility(target == TAB_SQUAD ? View.VISIBLE : View.GONE);
         refreshAllTabs();
         if (target == TAB_ADVENTURE) {
             adventureCanvas.startIdleAnimation();
+            campController.stopAnimation();
+        } else if (target == TAB_CAMP) {
+            adventureCanvas.stopIdleAnimation();
+            campController.startAnimation();
         } else {
             adventureCanvas.stopIdleAnimation();
+            campController.stopAnimation();
         }
     }
 
     private void refreshAllTabs() {
-        String todayStr = today();
-        refreshTabButtons(todayStr);
-        refreshAdventureTab(todayStr);
-        if (activeTab == TAB_SHOP) {
-            rebuildShopTab(todayStr);
-        } else if (activeTab == TAB_REPORT) {
-            rebuildReportTab(todayStr);
+        WorldClock.Snapshot clock = WorldClock.now();
+        refreshTopBar();
+        refreshPocketOverlay();
+        refreshTabButtons(clock.isoDate);
+        refreshAdventureTab(clock);
+        if (activeTab == TAB_CAMP) {
+            campController.render(campListContainer, progress, adventure, clock);
+        } else if (activeTab == TAB_JOURNAL) {
+            journalController.render(journalListContainer, progress, adventure, clock.isoDate);
+        } else if (activeTab == TAB_SQUAD) {
+            squadController.render(squadListContainer, progress, adventure, clock);
         }
     }
 
-    private void refreshTabsAfterWalk(String todayStr, StepProgress.Update update, boolean rewardOrEventChanged) {
-        refreshTabButtons(todayStr);
-        refreshAdventureTab(todayStr);
-        if (activeTab == TAB_SHOP && rewardOrEventChanged) {
-            rebuildShopTab(todayStr);
-        } else if (activeTab == TAB_REPORT && (update.changed() || rewardOrEventChanged)) {
-            rebuildReportTab(todayStr);
+    private void refreshTopBar() {
+        boolean fam = adventure.family.isFamilyMode();
+        modeToggleBtn.setText(fam ? "🎈 親子出任務" : "☀️ 平日模式");
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(UiKit.dp(this, 18));
+        bg.setColor(fam ? UiKit.COLOR_ACCENT_FIRE : UiKit.COLOR_WARM_BTN);
+        modeToggleBtn.setBackground(bg);
+        modeToggleBtn.setTextColor(fam ? UiKit.COLOR_PRIMARY_TEXT : getColor(R.color.ink));
+        topCurrencyText.setText(String.format(Locale.TAIWAN, "🪙 %d  ✨ %d", progress.coins, adventure.camp.starSand));
+    }
+
+    private void refreshPocketOverlay() {
+        if (pocketOverlay == null) return;
+        if (adventure.family.pocketMode) {
+            pocketOverlay.setVisibility(View.VISIBLE);
+            pocketStepsLabel.setText(String.format(
+                Locale.TAIWAN,
+                "本次口袋已收集：%d 步",
+                adventure.family.pocketStepsCollected
+            ));
+        } else {
+            pocketOverlay.setVisibility(View.GONE);
         }
     }
 
     private void refreshTabButtons(String todayStr) {
-        int claimable = adventure.pendingClaimableDailyCount(progress, todayStr);
         boolean hasEnc = adventure.pendingEncounter != null;
+        int campAlerts = adventure.vault.count() + adventure.companions.readyEggCount() + adventure.camp.readyGardenCount();
+        int claimable = adventure.pendingClaimableDailyCount(progress, todayStr);
+
         tabBtnAdventure.setText(getString(hasEnc ? R.string.tab_adventure_alert : R.string.tab_adventure));
-        tabBtnShop.setText(getString(R.string.tab_shop));
-        tabBtnReport.setText(claimable > 0
-            ? getString(R.string.tab_report_badge, claimable)
-            : getString(R.string.tab_report));
+        tabBtnCamp.setText(campAlerts > 0
+            ? getString(R.string.tab_camp_badge, campAlerts)
+            : getString(R.string.tab_camp));
+        tabBtnJournal.setText(getString(R.string.tab_journal));
+        tabBtnSquad.setText(claimable > 0
+            ? getString(R.string.tab_squad_badge, claimable)
+            : getString(R.string.tab_squad));
 
         styleTabButton(tabBtnAdventure, activeTab == TAB_ADVENTURE);
-        styleTabButton(tabBtnShop, activeTab == TAB_SHOP);
-        styleTabButton(tabBtnReport, activeTab == TAB_REPORT);
+        styleTabButton(tabBtnCamp, activeTab == TAB_CAMP);
+        styleTabButton(tabBtnJournal, activeTab == TAB_JOURNAL);
+        styleTabButton(tabBtnSquad, activeTab == TAB_SQUAD);
     }
 
     private void styleTabButton(Button btn, boolean selected) {
         GradientDrawable bg = new GradientDrawable();
-        bg.setCornerRadius(dp(14));
+        bg.setCornerRadius(UiKit.dp(this, 14));
         if (selected) {
-            bg.setColor(Color.rgb(46, 107, 52));
-            btn.setTextColor(Color.rgb(255, 247, 232));
+            bg.setColor(UiKit.COLOR_PRIMARY);
+            btn.setTextColor(UiKit.COLOR_PRIMARY_TEXT);
         } else {
             bg.setColor(Color.rgb(245, 232, 208));
             btn.setTextColor(getColor(R.color.ink));
@@ -504,38 +688,71 @@ public class MainActivity extends Activity implements SensorEventListener {
         btn.setBackground(bg);
     }
 
-    private void refreshAdventureTab(String todayStr) {
-        String statusText = statusText();
-        boolean statusAlert = stepSensor == null || !hasStepPermission();
-        adventureCanvas.bind(progress, adventure, todayStr, statusText, statusAlert);
+    private void refreshAdventureTab(WorldClock.Snapshot clock) {
+        String todayStr = clock.isoDate;
+        adventureCanvas.bind(progress, adventure, clock, statusText(), stepSensor == null || !hasStepPermission());
 
         int maxUnlocked = adventure.highestUnlockedBiomeIndex(progress);
         if (maxUnlocked > 0) {
             biomeNavRow.setVisibility(View.VISIBLE);
             int dispIdx = adventure.activeDisplayBiomeIndex(progress);
             AdventureCatalog.BiomeDef disp = AdventureCatalog.biome(dispIdx);
-            biomeNavLabel.setText(String.format(
-                Locale.TAIWAN,
-                "第 %d / %d 章：%s",
-                dispIdx + 1,
-                maxUnlocked + 1,
-                disp.name
-            ));
-            boolean canPrev = dispIdx > 0;
-            boolean canNext = dispIdx < maxUnlocked;
-            biomePrevButton.setEnabled(canPrev);
-            biomePrevButton.setAlpha(canPrev ? 1f : 0.45f);
-            biomeNextButton.setEnabled(canNext);
-            biomeNextButton.setAlpha(canNext ? 1f : 0.45f);
+            biomeNavLabel.setText(String.format(Locale.TAIWAN, "第 %d / %d 章：%s", dispIdx + 1, maxUnlocked + 1, disp.name));
+            biomePrevButton.setEnabled(dispIdx > 0);
+            biomePrevButton.setAlpha(dispIdx > 0 ? 1f : 0.45f);
+            biomeNextButton.setEnabled(dispIdx < maxUnlocked);
+            biomeNextButton.setAlpha(dispIdx < maxUnlocked ? 1f : 0.45f);
         } else {
             biomeNavRow.setVisibility(View.GONE);
         }
 
+        // 營火盒提醒卡
+        if (adventure.vault.count() > 0) {
+            vaultBannerCard.setVisibility(View.VISIBLE);
+            vaultBannerTitle.setText(String.format(
+                Locale.TAIWAN,
+                "🔥 營火盒裡存了 %d 個寶箱、%d 顆神祕蛋！",
+                adventure.vault.chestCount(),
+                adventure.vault.eggCount()
+            ));
+        } else {
+            vaultBannerCard.setVisibility(View.GONE);
+        }
+
+        // 島嶼守護巨獸安撫試煉卡
+        int frontierBiome = adventure.frontierBiomeIndex(progress);
+        if (!adventure.stories.isBossCleared(frontierBiome)) {
+            bossCard.setVisibility(View.VISIBLE);
+            StoryCatalog.BossDef boss = StoryCatalog.bossForBiome(frontierBiome);
+            boolean ready = adventure.stories.canCalmCurrentBoss(frontierBiome);
+            bossTitle.setText("🐲 島嶼守護試煉：" + boss.name);
+            bossBody.setText(String.format(
+                Locale.TAIWAN,
+                "%s\n進度：步數 %d / %d 步 ｜ 抬頭任務：%s",
+                boss.intro,
+                adventure.stories.bossStepProgress,
+                StoryCatalog.BOSS_REQUIRED_STEPS,
+                adventure.stories.bossLookUpDone ? "已完成 ✓" : "待完成（二選一即可過關！）"
+            ));
+            bossActionBtn.setText(ready
+                ? "✨ 條件達成！安撫巨獸領取稀有蛋"
+                : "繼續散步或完成 1 張抬頭任務即可安撫");
+            bossActionBtn.setEnabled(ready);
+            GradientDrawable bBg = new GradientDrawable();
+            bBg.setCornerRadius(UiKit.dp(this, 14));
+            bBg.setColor(ready ? UiKit.COLOR_ACCENT_STAR : UiKit.COLOR_DISABLED_BG);
+            bossActionBtn.setBackground(bBg);
+            bossActionBtn.setTextColor(ready ? UiKit.COLOR_PRIMARY_TEXT : UiKit.COLOR_DISABLED_TEXT);
+        } else {
+            bossCard.setVisibility(View.GONE);
+        }
+
+        // 互動奇遇與連貫故事卡
         GradientDrawable cardBg = new GradientDrawable();
-        cardBg.setCornerRadius(dp(18));
+        cardBg.setCornerRadius(UiKit.dp(this, 18));
         if (adventure.pendingEncounter != null) {
-            cardBg.setColor(Color.rgb(255, 240, 194));
-            cardBg.setStroke(dp(2), Color.rgb(226, 168, 62));
+            cardBg.setColor(UiKit.COLOR_CARD_GOLD);
+            cardBg.setStroke(UiKit.dp(this, 2), Color.rgb(226, 168, 62));
             encounterCard.setBackground(cardBg);
             encounterTitle.setText(adventure.pendingEncounter.title);
             encounterBody.setText(adventure.pendingEncounter.prompt);
@@ -544,290 +761,226 @@ public class MainActivity extends Activity implements SensorEventListener {
             encounterActionsRow.setVisibility(View.VISIBLE);
         } else {
             cardBg.setColor(Color.rgb(248, 236, 214));
-            cardBg.setStroke(dp(1), Color.rgb(225, 206, 178));
+            cardBg.setStroke(UiKit.dp(this, 1), Color.rgb(225, 206, 178));
             encounterCard.setBackground(cardBg);
             long nextEncAt = ((progress.eventBucket + 1L) * StepProgress.STEPS_PER_EVENT);
             long remainSteps = Math.max(0L, nextEncAt - progress.lifetime);
             encounterTitle.setText("冒險日誌速報");
             encounterBody.setText(String.format(
                 Locale.TAIWAN,
-                "%s\n⏳ 再走 %d 步即可觸發下一次路途奇遇。",
+                "%s\n⏳ 再走 %d 步觸發下一個連貫繪本奇遇。",
                 lastNoticeText,
                 remainSteps
             ));
             encounterActionsRow.setVisibility(View.GONE);
         }
 
+        // 線下親子抬頭任務卡
+        renderLookUpSection(todayStr);
+
         int claimable = adventure.pendingClaimableDailyCount(progress, todayStr);
         if (claimable > 0) {
             adventureFooterNote.setText(String.format(
                 Locale.TAIWAN,
-                "🎁 今日有 %d 項每日任務達標，可切到「戰報」領取獎勵！",
+                "🎁 今日有 %d 項步數任務達標，可切到「小隊」領取獎勵！",
                 claimable
             ));
-            adventureFooterNote.setTextColor(Color.rgb(46, 107, 52));
+            adventureFooterNote.setTextColor(UiKit.COLOR_PRIMARY);
         } else {
-            adventureFooterNote.setText("今天走得越多，冒險世界就越遠。");
+            adventureFooterNote.setText("今天走得越多，秘密營地與家庭回憶就越豐富。");
             adventureFooterNote.setTextColor(Color.rgb(110, 90, 76));
         }
     }
 
+    private void renderLookUpSection(String todayStr) {
+        lookUpContainer.removeAllViews();
+        adventure.stories.ensureDailyLookUpOffers(todayStr, random);
+        boolean fam = adventure.family.isFamilyMode();
+
+        String header = fam
+            ? "👀 今日親子抬頭任務（放下手機看世界，完成蓋章賺星砂！）"
+            : "👀 今日線下抬頭小任務（切到「親子出任務」更適合全家一起玩）";
+        UiKit.addSectionHeader(this, lookUpContainer, header);
+
+        // 年齡分級篩選列
+        LinearLayout filterRow = new LinearLayout(this);
+        filterRow.setOrientation(LinearLayout.HORIZONTAL);
+        filterRow.setPadding(0, 0, 0, UiKit.dp(this, 6));
+        addAgeFilterPill(filterRow, "全齡", StoryCatalog.AGE_ALL, todayStr);
+        addAgeFilterPill(filterRow, "學齡前/低年級", StoryCatalog.AGE_PRESCHOOL, todayStr);
+        addAgeFilterPill(filterRow, "中高年級+", StoryCatalog.AGE_ELEMENTARY, todayStr);
+
+        Button rerollBtn = UiKit.makeSmallPillButton(this, "🎲 換題", UiKit.COLOR_WARM_BTN, getColor(R.color.ink));
+        rerollBtn.setOnClickListener(v -> {
+            adventure.stories.rollLookUpOffers(random);
+            commitAndRefresh("已換上新的一組抬頭任務卡！");
+        });
+        filterRow.addView(rerollBtn);
+        lookUpContainer.addView(filterRow, UiKit.matchWrap());
+
+        int showCount = fam ? adventure.stories.offeredLookUpIds.size() : Math.min(1, adventure.stories.offeredLookUpIds.size());
+        for (int i = 0; i < showCount; i++) {
+            int qId = adventure.stories.offeredLookUpIds.get(i);
+            StoryCatalog.LookUpQuestDef q = StoryCatalog.lookUpQuestById(qId);
+            boolean done = adventure.stories.isLookUpCompletedToday(qId, todayStr);
+
+            LinearLayout qCard = UiKit.makeSectionCard(this, done ? UiKit.COLOR_CARD_GREEN : UiKit.COLOR_CARD_BG);
+            UiKit.addCardTitle(this, qCard, String.format(Locale.TAIWAN, "[%s] %s", q.category, q.title));
+            UiKit.addCardSubtitle(this, qCard, q.detail + String.format(
+                Locale.TAIWAN, "（+%d 金幣、+%d 星砂）", q.coinReward, q.starReward
+            ));
+            Button doneBtn = UiKit.makeActionButton(
+                this,
+                done ? UiKit.COLOR_DISABLED_BG : UiKit.COLOR_PRIMARY,
+                done ? UiKit.COLOR_DISABLED_TEXT : UiKit.COLOR_PRIMARY_TEXT
+            );
+            doneBtn.setText(done ? "今日已完成蓋章 ✓" : "🎉 我們完成了！寫句留念蓋章");
+            doneBtn.setEnabled(!done);
+            doneBtn.setOnClickListener(v -> showCompleteLookUpDialog(q, todayStr));
+            LinearLayout.LayoutParams lp = UiKit.matchWrap();
+            lp.setMargins(0, UiKit.dp(this, 6), 0, 0);
+            qCard.addView(doneBtn, lp);
+            lookUpContainer.addView(qCard, UiKit.cardMargins(this));
+        }
+    }
+
+    private void addAgeFilterPill(LinearLayout row, String label, String filterCode, String todayStr) {
+        boolean active = filterCode.equals(adventure.stories.lookUpAgeFilter);
+        Button btn = UiKit.makeSmallPillButton(
+            this,
+            label,
+            active ? UiKit.COLOR_PRIMARY : UiKit.COLOR_CARD_MUTED,
+            active ? UiKit.COLOR_PRIMARY_TEXT : getColor(R.color.ink)
+        );
+        btn.setOnClickListener(v -> {
+            adventure.stories.setAgeFilterAndReroll(filterCode, todayStr, random);
+            commitAndRefresh("已切換抬頭任務年齡層：" + label);
+        });
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        lp.setMargins(0, 0, UiKit.dp(this, 5), 0);
+        row.addView(btn, lp);
+    }
+
+    private void showCompleteLookUpDialog(StoryCatalog.LookUpQuestDef quest, String todayStr) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(UiKit.dp(this, 20), UiKit.dp(this, 10), UiKit.dp(this, 20), UiKit.dp(this, 4));
+        TextView hint = new TextView(this);
+        hint.setText("寫下今天孩子說的好玩的話或小發現（選填，會收進手札留念）：");
+        hint.setTextColor(getColor(R.color.ink));
+        box.addView(hint);
+
+        EditText noteInput = new EditText(this);
+        noteInput.setHint("例：小寶說那朵雲像正在跑步的小狗狗！");
+        box.addView(noteInput);
+
+        dismissActiveDialog();
+        activeDialog = new AlertDialog.Builder(this)
+            .setTitle("👀 完成「" + quest.title + "」")
+            .setView(box)
+            .setPositiveButton("蓋章領獎！", (d, w) -> {
+                AdventureState.ActionResult r = adventure.completeLookUpQuest(
+                    progress, quest.id, noteInput.getText().toString(), todayStr
+                );
+                commitAndRefresh(r.message);
+            })
+            .setNegativeButton("取消", null)
+            .create();
+        activeDialog.show();
+    }
+
+    private void showCampfireUnboxDialog() {
+        if (adventure.vault.isEmpty()) {
+            showShortToast("目前營火盒是空的！平日走路滿 1,000 步或撿到蛋就會自動存進來喔！");
+            return;
+        }
+        String todayStr = WorldClock.now().isoDate;
+        boolean fam = adventure.family.isFamilyMode();
+        int fireLv = adventure.camp.buildingLevel(CampState.BLD_CAMPFIRE);
+        int bonusPct = fam ? (10 + Math.max(0, fireLv - 1) * 6) : 0;
+
+        String[] labels = new String[adventure.vault.items.size()];
+        for (int i = 0; i < adventure.vault.items.size(); i++) {
+            CampfireVault.VaultItem it = adventure.vault.items.get(i);
+            labels[i] = it.eggType >= 0
+                ? String.format(Locale.TAIWAN, "🥚 %s（存入：%s）", it.title, it.createdDate)
+                : String.format(Locale.TAIWAN, "🎁 %s（約 %d 金幣 +%d 星砂）", it.title, it.coins, it.starSand);
+        }
+
+        String title = fam
+            ? String.format(Locale.TAIWAN, "🔥 親子營火開箱（金幣 +%d%% 加成！）", bonusPct)
+            : "🔥 營火開箱盒（切到親子模式享更高加成！）";
+
+        dismissActiveDialog();
+        activeDialog = new AlertDialog.Builder(this)
+            .setTitle(title)
+            .setItems(labels, (d, which) -> {
+                if (which >= 0 && which < adventure.vault.items.size()) {
+                    String id = adventure.vault.items.get(which).id;
+                    CampfireVault.OpenOutcome out = adventure.openVaultItem(progress, id, todayStr);
+                    commitAndRefresh(out.message);
+                    if (out.ok && !adventure.vault.isEmpty()) {
+                        showCampfireUnboxDialog(); // 讓孩子連續開箱！
+                    }
+                }
+            })
+            .setPositiveButton("一次全開！", (d, w) -> {
+                int opened = 0;
+                int totalCoins = 0;
+                int totalStars = 0;
+                int eggsPlaced = 0;
+                for (int guard = 0; guard < CampfireVault.MAX_ITEMS && !adventure.vault.isEmpty(); guard++) {
+                    String nextId = null;
+                    for (CampfireVault.VaultItem it : adventure.vault.items) {
+                        if (it.eggType < 0 || adventure.companions.hasFreeEggSlot()) {
+                            nextId = it.id;
+                            break;
+                        }
+                    }
+                    if (nextId == null) break;
+                    CampfireVault.OpenOutcome out = adventure.openVaultItem(progress, nextId, todayStr);
+                    if (!out.ok) break;
+                    opened++;
+                    totalCoins += out.coinsGained;
+                    totalStars += out.starSandGained;
+                    if (out.eggPlaced) eggsPlaced++;
+                }
+                if (opened == 0) {
+                    showShortToast("孵蛋巢已滿，先孵化一顆蛋就能打開剩餘的神祕蛋喔！");
+                } else {
+                    commitAndRefresh(String.format(
+                        Locale.TAIWAN,
+                        "🔥 營火派對開出 %d 件包裹！+%d 金幣、+%d 星砂%s",
+                        opened, totalCoins, totalStars, eggsPlaced > 0 ? ("、放入 " + eggsPlaced + " 顆蛋！") : ""
+                    ));
+                }
+            })
+            .setNegativeButton("先留著", null)
+            .create();
+        activeDialog.show();
+    }
+
+    private void showMigrationWelcomeDialog(String message) {
+        dismissActiveDialog();
+        activeDialog = new AlertDialog.Builder(this)
+            .setTitle("🎉 歡迎升級《走走冒險 2.0》")
+            .setMessage(message)
+            .setPositiveButton("去看看秘密營地！", (d, w) -> switchTab(TAB_CAMP))
+            .setNegativeButton("太棒了", null)
+            .create();
+        activeDialog.show();
+    }
+
     private void onEncounterChoice(int choiceIndex) {
-        String todayStr = today();
+        String todayStr = WorldClock.now().isoDate;
         AdventureState.ActionResult res = adventure.resolvePendingEncounter(progress, choiceIndex, todayStr, random);
         if (!res.ok) {
             showShortToast(res.message);
             return;
         }
-        lastNoticeText = res.message;
-        saveProgress();
-        showShortToast(res.message);
-        refreshAllTabs();
-    }
-
-    private void rebuildShopTab(String todayStr) {
-        shopListContainer.removeAllViews();
-
-        // 錢包與加成總覽
-        LinearLayout headerCard = makeSectionCard(Color.rgb(255, 234, 188));
-        addCardTitle(headerCard, String.format(Locale.TAIWAN, "🪙 持有金幣：%d", progress.coins));
-        addCardSubtitle(headerCard, String.format(
-            Locale.TAIWAN,
-            "目前總加成：走路 XP +%d%% · 寶箱／勝利金幣 +%d%% · 雙倍幸運 %d%%",
-            adventure.xpMultiplierPercent(),
-            adventure.coinMultiplierPercent(),
-            15 + adventure.compassLevel * 12
-        ));
-        shopListContainer.addView(headerCard, cardMargins());
-
-        // 冒險裝備升級區
-        addSectionHeader(shopListContainer, "🎒 冒險裝備升級（永久被動加成）");
-        for (int g = 0; g < AdventureCatalog.GEAR_COUNT; g++) {
-            final int gearIdx = g;
-            int level = adventure.gearLevel(gearIdx);
-            int cost = AdventureCatalog.gearUpgradeCost(gearIdx, level);
-            LinearLayout card = makeSectionCard(Color.rgb(255, 250, 240));
-            addCardTitle(card, AdventureCatalog.gearName(gearIdx));
-            addCardSubtitle(card, AdventureCatalog.gearEffectSummary(gearIdx, level));
-
-            ProgressBar pb = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-            pb.setMax(AdventureCatalog.GEAR_MAX_LEVEL);
-            pb.setProgress(level);
-            LinearLayout.LayoutParams pbLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            );
-            pbLp.setMargins(0, dp(4), 0, dp(8));
-            card.addView(pb, pbLp);
-
-            boolean maxed = level >= AdventureCatalog.GEAR_MAX_LEVEL;
-            boolean affordable = !maxed && progress.coins >= cost;
-            Button buyBtn = makeActionButton(
-                maxed ? Color.rgb(225, 212, 190) : (affordable ? Color.rgb(46, 107, 52) : Color.rgb(228, 216, 198)),
-                maxed ? Color.rgb(110, 90, 76) : (affordable ? Color.rgb(255, 247, 232) : Color.rgb(120, 102, 86))
-            );
-            buyBtn.setText(maxed ? "已達最高等級 ★" : String.format(Locale.TAIWAN, "升級裝備（%d 金幣）", cost));
-            buyBtn.setEnabled(!maxed);
-            buyBtn.setOnClickListener(v -> {
-                AdventureState.ActionResult res = adventure.upgradeGear(progress, gearIdx, todayStr);
-                showShortToast(res.message);
-                if (res.ok) {
-                    lastNoticeText = res.message;
-                    saveProgress();
-                    refreshAllTabs();
-                }
-            });
-            card.addView(buyBtn, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ));
-            shopListContainer.addView(card, cardMargins());
-        }
-
-        // 同伴招募區
-        addSectionHeader(shopListContainer, "🐾 可愛旅伴招募（招募後可隨時切換）");
-        for (int c = 0; c < AdventureCatalog.COMPANION_COUNT; c++) {
-            final int compId = c;
-            AdventureCatalog.CompanionDef def = AdventureCatalog.companion(compId);
-            boolean unlocked = adventure.isCompanionUnlocked(compId);
-            boolean equipped = adventure.equippedCompanion == compId;
-            boolean canAfford = progress.coins >= def.cost;
-
-            LinearLayout card = makeSectionCard(equipped ? Color.rgb(233, 245, 227) : Color.rgb(255, 250, 240));
-            addCardTitle(card, String.format(Locale.TAIWAN, "%s · %s", def.name, def.role));
-            addCardSubtitle(card, def.perkText);
-
-            Button compBtn;
-            if (equipped) {
-                compBtn = makeActionButton(Color.rgb(112, 175, 116), Color.rgb(255, 250, 242));
-                compBtn.setText("目前同行中 ✓");
-                compBtn.setEnabled(false);
-            } else if (unlocked) {
-                compBtn = makeActionButton(Color.rgb(255, 225, 170), getColor(R.color.ink));
-                compBtn.setText("換牠同行");
-            } else {
-                compBtn = makeActionButton(
-                    canAfford ? Color.rgb(46, 107, 52) : Color.rgb(228, 216, 198),
-                    canAfford ? Color.rgb(255, 247, 232) : Color.rgb(120, 102, 86)
-                );
-                compBtn.setText(String.format(Locale.TAIWAN, "招募夥伴（%d 金幣）", def.cost));
-            }
-            compBtn.setOnClickListener(v -> {
-                AdventureState.ActionResult res = adventure.buyOrEquipCompanion(progress, compId, todayStr);
-                showShortToast(res.message);
-                if (res.ok) {
-                    lastNoticeText = res.message;
-                    saveProgress();
-                    refreshAllTabs();
-                }
-            });
-            LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            );
-            btnLp.setMargins(0, dp(8), 0, 0);
-            card.addView(compBtn, btnLp);
-            shopListContainer.addView(card, cardMargins());
-        }
-    }
-
-    private void rebuildReportTab(String todayStr) {
-        reportListContainer.removeAllViews();
-
-        // 7 日步數圖表與戰報總覽
-        LinearLayout chartCard = makeSectionCard(Color.rgb(255, 250, 240));
-        addCardTitle(chartCard, "📊 近 7 天步數與冒險戰報");
-        addCardSubtitle(chartCard, String.format(
-            Locale.TAIWAN,
-            "🔥 連續達標 %d 天（最佳 %d 天） · 累計 %d 步 · 完成 %d 次奇遇",
-            adventure.effectiveStreak(todayStr),
-            adventure.bestStreakDays,
-            progress.lifetime,
-            adventure.encountersResolved
-        ));
-
-        WeeklyChartView chart = new WeeklyChartView(this);
-        chart.setRecords(adventure.lastSevenDays(progress, todayStr));
-        LinearLayout.LayoutParams chartLp = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        chartLp.setMargins(0, dp(8), 0, dp(8));
-        chartCard.addView(chart, chartLp);
-
-        Button copyBtn = makeActionButton(Color.rgb(46, 107, 52), Color.rgb(255, 247, 232));
-        copyBtn.setText(R.string.copy_report);
-        copyBtn.setOnClickListener(v -> copyDailyReportToClipboard(todayStr));
-        chartCard.addView(copyBtn, new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        ));
-        reportListContainer.addView(chartCard, cardMargins());
-
-        // 今日每日任務
-        addSectionHeader(reportListContainer, "🎯 今日步數任務");
-        long todaySteps = progress.todayStepsOn(todayStr);
-        for (AdventureCatalog.DailyQuestDef def : AdventureCatalog.DAILY_QUESTS) {
-            boolean reached = todaySteps >= def.targetSteps;
-            boolean claimed = adventure.isDailyQuestClaimed(def.index, todayStr);
-            LinearLayout card = makeSectionCard(claimed ? Color.rgb(233, 245, 227) : Color.rgb(255, 250, 240));
-            addCardTitle(card, String.format(
-                Locale.TAIWAN,
-                "%s（%d / %d 步）",
-                def.title,
-                Math.min(todaySteps, def.targetSteps),
-                def.targetSteps
-            ));
-            int previewCoins = adventure.dailyQuestCoinReward(def.index);
-            String bonusTag = adventure.equippedCompanion == AdventureCatalog.COMPANION_OWL ? "（波波 +25%）" : "";
-            addCardSubtitle(card, String.format(
-                Locale.TAIWAN,
-                "獎勵：+%d 金幣%s、+%d 冒險 XP",
-                previewCoins,
-                bonusTag,
-                def.xpReward
-            ));
-
-            ProgressBar pb = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-            pb.setMax((int) def.targetSteps);
-            pb.setProgress((int) Math.min(todaySteps, def.targetSteps));
-            LinearLayout.LayoutParams pbLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            );
-            pbLp.setMargins(0, dp(4), 0, dp(8));
-            card.addView(pb, pbLp);
-
-            Button qBtn = makeActionButton(
-                claimed ? Color.rgb(214, 226, 208) : (reached ? Color.rgb(46, 107, 52) : Color.rgb(228, 216, 198)),
-                claimed ? Color.rgb(70, 96, 66) : (reached ? Color.rgb(255, 247, 232) : Color.rgb(120, 102, 86))
-            );
-            qBtn.setText(claimed ? "今日已領取 ✓" : (reached ? "領取任務獎勵！" : "繼續散步以達成"));
-            qBtn.setEnabled(reached && !claimed);
-            qBtn.setOnClickListener(v -> {
-                AdventureState.ActionResult res = adventure.claimDailyQuest(progress, def.index, todayStr);
-                showShortToast(res.message);
-                if (res.ok) {
-                    lastNoticeText = res.message;
-                    saveProgress();
-                    refreshAllTabs();
-                }
-            });
-            card.addView(qBtn, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ));
-            reportListContainer.addView(card, cardMargins());
-        }
-
-        // 成就徽章圖鑑
-        int unlockedBadges = 0;
-        for (int i = 0; i < AdventureCatalog.ACHIEVEMENTS.length; i++) {
-            if (adventure.isAchievementUnlocked(i)) unlockedBadges++;
-        }
-        addSectionHeader(reportListContainer, String.format(
-            Locale.TAIWAN,
-            "🏆 成就稱號徽章（已解鎖 %d / %d）",
-            unlockedBadges,
-            AdventureCatalog.ACHIEVEMENTS.length
-        ));
-        for (AdventureCatalog.AchievementDef def : AdventureCatalog.ACHIEVEMENTS) {
-            boolean unlocked = adventure.isAchievementUnlocked(def.index);
-            LinearLayout card = makeSectionCard(unlocked ? Color.rgb(255, 236, 182) : Color.rgb(241, 230, 212));
-            String titleLine = String.format(
-                Locale.TAIWAN,
-                "%s %s（+%d 金幣）",
-                unlocked ? "🏆" : "🔒",
-                def.title,
-                def.coinReward
-            );
-            addCardTitle(card, titleLine);
-            addCardSubtitle(card, def.conditionText);
-            reportListContainer.addView(card, cardMargins());
-        }
-
-        // 冒險日誌
-        addSectionHeader(reportListContainer, "📜 冒險日誌紀錄");
-        if (adventure.adventureLog.isEmpty()) {
-            LinearLayout emptyCard = makeSectionCard(Color.rgb(255, 250, 240));
-            addCardSubtitle(emptyCard, "目前還沒有冒險日誌，跨出第一步就能紀錄奇遇囉！");
-            reportListContainer.addView(emptyCard, cardMargins());
-        } else {
-            LinearLayout logCard = makeSectionCard(Color.rgb(255, 250, 240));
-            for (int i = 0; i < adventure.adventureLog.size(); i++) {
-                AdventureState.LogEntry entry = adventure.adventureLog.get(i);
-                TextView tv = new TextView(this);
-                tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-                tv.setTextColor(getColor(R.color.ink));
-                tv.setPadding(0, dp(3), 0, dp(3));
-                String line = entry.date.isEmpty()
-                    ? entry.summary
-                    : String.format(Locale.TAIWAN, "%s · %s", entry.date, entry.summary);
-                tv.setText(line);
-                logCard.addView(tv);
-            }
-            reportListContainer.addView(logCard, cardMargins());
-        }
+        commitAndRefresh(res.message);
     }
 
     private void copyDailyReportToClipboard(String todayStr) {
@@ -839,78 +992,23 @@ public class MainActivity extends Activity implements SensorEventListener {
         }
     }
 
-    private LinearLayout makeSectionCard(int bgColor) {
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(14), dp(12), dp(14), dp(12));
-        GradientDrawable d = new GradientDrawable();
-        d.setColor(bgColor);
-        d.setCornerRadius(dp(18));
-        d.setStroke(dp(1), Color.rgb(230, 212, 186));
-        card.setBackground(d);
-        return card;
-    }
-
-    private LinearLayout.LayoutParams cardMargins() {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        lp.setMargins(0, 0, 0, dp(10));
-        return lp;
-    }
-
-    private void addSectionHeader(LinearLayout parent, String title) {
-        TextView tv = new TextView(this);
-        tv.setText(title);
-        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        tv.setTypeface(Typeface.create("sans", Typeface.BOLD));
-        tv.setTextColor(getColor(R.color.ink));
-        tv.setPadding(dp(2), dp(6), dp(2), dp(6));
-        parent.addView(tv);
-    }
-
-    private void addCardTitle(LinearLayout card, String text) {
-        TextView tv = new TextView(this);
-        tv.setText(text);
-        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        tv.setTypeface(Typeface.create("sans", Typeface.BOLD));
-        tv.setTextColor(getColor(R.color.ink));
-        card.addView(tv);
-    }
-
-    private void addCardSubtitle(LinearLayout card, String text) {
-        TextView tv = new TextView(this);
-        tv.setText(text);
-        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        tv.setTextColor(Color.rgb(104, 82, 66));
-        tv.setPadding(0, dp(3), 0, 0);
-        card.addView(tv);
-    }
-
-    private int dp(int value) {
-        return Math.round(TypedValue.applyDimension(
-            TypedValue.COMPLEX_UNIT_DIP,
-            value,
-            getResources().getDisplayMetrics()
-        ));
-    }
-
     private String statusText() {
         if (stepSensor == null) return "此裝置沒有步數感測器，無法取得實際步數。";
         if (isPermissionPermanentlyDenied()) return "尚未開啟「身體活動」權限，點一下畫面前往系統設定允許。";
         if (!hasStepPermission()) return "尚未允許「活動辨識」權限，點一下畫面重新授權計步。";
-        return "步數感測器已連線 • 關閉 App 也會保留進度";
+        return "步數感測器已連線 • 純本機離線運作，關閉 App 也會保留進度";
     }
+
+    // ──────────────── App 內自動更新（維持既有安全驗證流程） ────────────────
 
     private void renderUpdateButton(int state) {
         if (updateButton == null) return;
         GradientDrawable pill = new GradientDrawable();
-        pill.setCornerRadius(dp(22));
+        pill.setCornerRadius(UiKit.dp(this, 20));
         if (state == UPDATE_STATE_READY && readyRelease != null) {
-            pill.setColor(Color.rgb(46, 107, 52));
+            pill.setColor(UiKit.COLOR_PRIMARY);
             updateButton.setBackground(pill);
-            updateButton.setTextColor(Color.rgb(255, 247, 232));
+            updateButton.setTextColor(UiKit.COLOR_PRIMARY_TEXT);
             updateButton.setText(getString(R.string.update_ready_button, readyRelease.versionName));
             updateButton.setEnabled(true);
         } else if (state == UPDATE_STATE_CHECKING || state == UPDATE_STATE_DOWNLOADING) {
@@ -922,7 +1020,7 @@ public class MainActivity extends Activity implements SensorEventListener {
             ));
             updateButton.setEnabled(false);
         } else {
-            pill.setColor(Color.rgb(255, 225, 170));
+            pill.setColor(UiKit.COLOR_WARM_BTN);
             updateButton.setBackground(pill);
             updateButton.setTextColor(getColor(R.color.ink));
             updateButton.setText(getString(R.string.update_check));
@@ -935,15 +1033,14 @@ public class MainActivity extends Activity implements SensorEventListener {
             PackageInfo info;
             if (Build.VERSION.SDK_INT >= 33) {
                 info = getPackageManager().getPackageInfo(
-                    getPackageName(),
-                    PackageManager.PackageInfoFlags.of(0)
+                    getPackageName(), PackageManager.PackageInfoFlags.of(0)
                 );
             } else {
                 info = getPackageManager().getPackageInfo(getPackageName(), 0);
             }
-            return info.versionName != null ? info.versionName : "0.1.0";
+            return info.versionName != null ? info.versionName : "1.0.0";
         } catch (PackageManager.NameNotFoundException ignored) {
-            return "0.1.0";
+            return "1.0.0";
         }
     }
 
@@ -968,10 +1065,7 @@ public class MainActivity extends Activity implements SensorEventListener {
             boolean ignored = cachedApk.delete();
         }
         readyRelease = null;
-        devicePrefs.edit()
-            .remove(KEY_DOWNLOADED_TAG)
-            .remove(KEY_DISMISSED_TAG)
-            .apply();
+        devicePrefs.edit().remove(KEY_DOWNLOADED_TAG).remove(KEY_DISMISSED_TAG).apply();
         renderUpdateButton(UPDATE_STATE_IDLE);
     }
 
@@ -990,8 +1084,7 @@ public class MainActivity extends Activity implements SensorEventListener {
     }
 
     private void saveReleaseMetadata(String etag, AppUpdate.ReleaseInfo info, long checkedAtMs) {
-        SharedPreferences.Editor editor = devicePrefs.edit()
-            .putLong(KEY_UPDATE_LAST_CHECK, checkedAtMs);
+        SharedPreferences.Editor editor = devicePrefs.edit().putLong(KEY_UPDATE_LAST_CHECK, checkedAtMs);
         if (etag != null && !etag.trim().isEmpty()) {
             editor.putString(KEY_UPDATE_ETAG, etag.trim());
         }
@@ -1030,38 +1123,28 @@ public class MainActivity extends Activity implements SensorEventListener {
                 || outcome.status == AppUpdate.CheckOutcome.STATUS_NOT_MODIFIED) {
                 saveReleaseMetadata(outcome.etag, outcome.release, checkedAtMs);
             }
-
             if (outcome.status != AppUpdate.CheckOutcome.STATUS_OK
                 && outcome.status != AppUpdate.CheckOutcome.STATUS_NOT_MODIFIED) {
-                finishUpdateCheckOnUi(manual, outcome.status, null, false);
+                finishUpdateCheckOnUi(manual, outcome.status, null, false, false);
                 return;
             }
-
             AppUpdate.ReleaseInfo release = outcome.release;
             if (release == null || !AppUpdate.isRemoteNewer(release.versionName, currentVersion)) {
-                finishUpdateCheckOnUi(manual, AppUpdate.CheckOutcome.STATUS_NO_RELEASE, null, true);
+                finishUpdateCheckOnUi(manual, AppUpdate.CheckOutcome.STATUS_NO_RELEASE, null, true, false);
                 return;
             }
-
-            boolean alreadyDownloaded = AppUpdate.verifyDownloadedApk(
-                targetApkFile,
-                release.apkSize,
-                release.apkSha256
-            );
+            boolean alreadyDownloaded = AppUpdate.verifyDownloadedApk(targetApkFile, release.apkSize, release.apkSha256);
             if (!alreadyDownloaded) {
                 runOnUiThread(() -> {
-                    if (!isFinishing() && !isDestroyed()) {
-                        renderUpdateButton(UPDATE_STATE_DOWNLOADING);
-                    }
+                    if (!isFinishing() && !isDestroyed()) renderUpdateButton(UPDATE_STATE_DOWNLOADING);
                 });
                 alreadyDownloaded = AppUpdate.downloadVerifiedApk(release, targetApkFile);
             }
-
             if (alreadyDownloaded) {
                 devicePrefs.edit().putString(KEY_DOWNLOADED_TAG, release.tagName).apply();
-                finishUpdateCheckOnUi(manual, AppUpdate.CheckOutcome.STATUS_OK, release, true);
+                finishUpdateCheckOnUi(manual, AppUpdate.CheckOutcome.STATUS_OK, release, true, false);
             } else {
-                finishUpdateCheckOnUi(manual, AppUpdate.CheckOutcome.STATUS_ERROR, release, false);
+                finishUpdateCheckOnUi(manual, AppUpdate.CheckOutcome.STATUS_ERROR, null, true, true);
             }
         });
     }
@@ -1070,12 +1153,12 @@ public class MainActivity extends Activity implements SensorEventListener {
         boolean manual,
         int status,
         AppUpdate.ReleaseInfo downloadedRelease,
-        boolean reachedServer
+        boolean reachedServer,
+        boolean downloadFailed
     ) {
         runOnUiThread(() -> {
             if (isFinishing() || isDestroyed()) return;
             updateInFlight = false;
-
             if (downloadedRelease != null) {
                 readyRelease = downloadedRelease;
                 renderUpdateButton(UPDATE_STATE_READY);
@@ -1085,23 +1168,19 @@ public class MainActivity extends Activity implements SensorEventListener {
                 }
                 return;
             }
-
             if (reachedServer && readyRelease != null
                 && !AppUpdate.isRemoteNewer(readyRelease.versionName, currentVersion)) {
                 clearStaleDownloadedApk(ApkFileProvider.updateApkFile(this));
             } else {
                 renderUpdateButton(readyRelease != null ? UPDATE_STATE_READY : UPDATE_STATE_IDLE);
             }
-
             if (!manual) return;
             if (status == AppUpdate.CheckOutcome.STATUS_NO_RELEASE) {
                 showShortToast(getString(R.string.update_up_to_date, currentVersion));
             } else if (status == AppUpdate.CheckOutcome.STATUS_RATE_LIMITED) {
                 showShortToast(getString(R.string.update_rate_limited));
             } else {
-                showShortToast(getString(
-                    downloadedRelease != null ? R.string.update_download_failed : R.string.update_check_failed
-                ));
+                showShortToast(getString(downloadFailed ? R.string.update_download_failed : R.string.update_check_failed));
             }
         });
     }
@@ -1199,11 +1278,15 @@ public class MainActivity extends Activity implements SensorEventListener {
         activeToast.show();
     }
 
+    // ──────────────── 生命週期、權限與計步感測器 ────────────────
+
     @Override protected void onResume() {
         super.onResume();
         register();
         if (activeTab == TAB_ADVENTURE && adventureCanvas != null) {
             adventureCanvas.startIdleAnimation();
+        } else if (activeTab == TAB_CAMP && campController != null) {
+            campController.startAnimation();
         }
         if (pendingInstallAfterSettings) {
             pendingInstallAfterSettings = false;
@@ -1216,6 +1299,7 @@ public class MainActivity extends Activity implements SensorEventListener {
     @Override protected void onPause() {
         super.onPause();
         if (adventureCanvas != null) adventureCanvas.stopIdleAnimation();
+        if (campController != null) campController.stopAnimation();
         if (sensorManager != null) sensorManager.unregisterListener(this);
     }
 
@@ -1267,13 +1351,11 @@ public class MainActivity extends Activity implements SensorEventListener {
         refreshAllTabs();
     }
 
-    private String today() {
-        return LocalDate.now().toString();
-    }
-
     private long bootCount() {
         return Settings.Global.getInt(getContentResolver(), Settings.Global.BOOT_COUNT, (int) StepProgress.UNKNOWN);
     }
+
+    // ──────────────── 雙層本機存檔（SharedPreferences + 原子 JSON） ────────────────
 
     private StepProgress loadProgress() {
         StepProgress p = new StepProgress();
@@ -1290,7 +1372,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         p.day = prefs.getString(KEY_DAY, null);
         p.todaySteps = prefs.contains(KEY_TODAY)
             ? prefs.getLong(KEY_TODAY, 0)
-            : StepProgress.todayStepsFromLegacy(p.day, today(), prefs.getFloat(KEY_LEGACY_BASELINE, -1), p.lastSensorSteps);
+            : StepProgress.todayStepsFromLegacy(p.day, WorldClock.now().isoDate, prefs.getFloat(KEY_LEGACY_BASELINE, -1), p.lastSensorSteps);
         return p;
     }
 
@@ -1317,7 +1399,54 @@ public class MainActivity extends Activity implements SensorEventListener {
         return s;
     }
 
-    /** 一次寫入冒險進度、RPG 狀態與本機感測器錨點。 */
+    private boolean loadV2StateFile(AdventureState target) {
+        File file = new File(getFilesDir(), V2_SAVE_FILENAME);
+        if (!file.exists()) return false;
+        try {
+            String raw = readTextFile(file);
+            if (SaveCodec.deserializeInto(raw, target)) {
+                return true;
+            }
+            // JSON 損壞時備份成 .bak 並回退安全重建
+            File bak = new File(getFilesDir(), V2_SAVE_FILENAME + ".bak");
+            boolean ignored = file.renameTo(bak);
+        } catch (IOException ignored) {
+            // 讀取異常時交由 migrateIfNeeded 安全初始化
+        }
+        return false;
+    }
+
+    private void saveV2StateFileAtomic(AdventureState src) {
+        String json = SaveCodec.serialize(src);
+        File target = new File(getFilesDir(), V2_SAVE_FILENAME);
+        File tmp = new File(getFilesDir(), V2_SAVE_FILENAME + ".tmp");
+        try (FileOutputStream fos = new FileOutputStream(tmp)) {
+            fos.write(json.getBytes(StandardCharsets.UTF_8));
+            fos.getFD().sync();
+        } catch (IOException ignored) {
+            return;
+        }
+        if (!tmp.renameTo(target)) {
+            // 某些檔案系統若目標已存在時 renameTo 需先移除舊檔
+            boolean deleted = !target.exists() || target.delete();
+            if (deleted) {
+                boolean ignored = tmp.renameTo(target);
+            }
+        }
+    }
+
+    private static String readTextFile(File file) throws IOException {
+        try (FileInputStream fis = new FileInputStream(file);
+             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = fis.read(buf)) > 0) {
+                out.write(buf, 0, n);
+            }
+            return out.toString("UTF-8");
+        }
+    }
+
     private void saveProgress() {
         prefs.edit()
             .putString(KEY_DAY, progress.day)
@@ -1352,6 +1481,7 @@ public class MainActivity extends Activity implements SensorEventListener {
             .putLong(KEY_LAST_SENSOR, progress.lastSensorSteps)
             .putLong(KEY_BOOT_COUNT, progress.lastBootCount)
             .apply();
+        saveV2StateFileAtomic(adventure);
     }
 
     @Override public void onSensorChanged(SensorEvent e) {
@@ -1359,15 +1489,15 @@ public class MainActivity extends Activity implements SensorEventListener {
             || e.values == null || e.values.length == 0) {
             return;
         }
-        String todayStr = today();
-        StepProgress.Update update = progress.onSensorReading((long) e.values[0], todayStr, bootCount(), random);
-        String rpgNotice = adventure.applyWalkUpdate(progress, update, todayStr, random);
+        WorldClock.Snapshot clock = WorldClock.now();
+        StepProgress.Update update = progress.onSensorReading((long) e.values[0], clock.isoDate, bootCount(), random);
+        String rpgNotice = adventure.applyWalkUpdateV2(progress, update, clock, random);
         saveProgress();
-        if (rpgNotice != null) {
+        if (rpgNotice != null && !adventure.family.pocketMode) {
             lastNoticeText = rpgNotice;
             showShortToast(rpgNotice.replace('\n', ' '));
         }
-        refreshTabsAfterWalk(todayStr, update, rpgNotice != null);
+        refreshAllTabs();
     }
 
     @Override public void onAccuracyChanged(Sensor s, int a) {}

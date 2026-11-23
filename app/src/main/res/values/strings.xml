@@ -2,11 +2,13 @@
 <resources>
     <string name="app_name">走走冒險</string>
     <string name="version_label">v%1$s</string>
-    <string name="tab_adventure">冒險</string>
-    <string name="tab_adventure_alert">冒險 (!)</string>
-    <string name="tab_shop">商店</string>
-    <string name="tab_report">戰報</string>
-    <string name="tab_report_badge">戰報 (%1$d)</string>
+    <string name="tab_adventure">探險</string>
+    <string name="tab_adventure_alert">探險(!)</string>
+    <string name="tab_camp">營地</string>
+    <string name="tab_camp_badge">營地(%1$d)</string>
+    <string name="tab_journal">手札</string>
+    <string name="tab_squad">小隊</string>
+    <string name="tab_squad_badge">小隊(%1$d)</string>
     <string name="biome_prev">◀ 上一區</string>
     <string name="biome_next">下一區 ▶</string>
     <string name="copy_report">複製今日冒險戰報</string>

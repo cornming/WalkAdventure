@@ -30,6 +30,9 @@ final class AdventureCatalog {
     static final int ENCOUNTER_MERCHANT = 2;
     static final int ENCOUNTER_SHRINE = 3;
     static final int ENCOUNTER_STARTER = 4;
+    static final int ENCOUNTER_STORY = 5;
+
+    static final int EXTRA_ACHIEVEMENT_COUNT = 10;
 
     private AdventureCatalog() {}
 
@@ -165,6 +168,19 @@ final class AdventureCatalog {
         new AchievementDef(9, "三日火種", "達成連續 3 天完成暖身目標", 60)
     };
 
+    static final AchievementDef[] EXTRA_ACHIEVEMENTS = {
+        new AchievementDef(0, "十萬星旅", "累計真實步數達 100,000 步", 220),
+        new AchievementDef(1, "家庭出動", "建立 2 位以上家庭成員並啟動親子模式", 40),
+        new AchievementDef(2, "暖心營火夜", "完成 3 次營火開箱儀式", 60),
+        new AchievementDef(3, "破殼奇蹟", "成功孵化第 1 顆神祕蛋", 50),
+        new AchievementDef(4, "小小動物園", "收集 6 位以上不同旅伴", 100),
+        new AchievementDef(5, "傳說進化師", "將任一位旅伴培養至第 3 階段大師形態", 120),
+        new AchievementDef(6, "秘密基地長", "營地所有設施累計升級達 10 級", 120),
+        new AchievementDef(7, "奇幻豐收王", "在奇幻小菜園累計採收 5 次作物", 80),
+        new AchievementDef(8, "繪本收藏家", "完成 3 條完整的連貫繪本故事", 100),
+        new AchievementDef(9, "抬頭看世界", "完成 5 次線下親子抬頭任務", 90)
+    };
+
     static BiomeDef biome(int index) {
         if (index < 0 || index >= BIOMES.length) return BIOMES[0];
         return BIOMES[index];
@@ -262,6 +278,20 @@ final class AdventureCatalog {
             "刻滿星紋的小石碑正散發著暖光，你可以向它許下一個願望。",
             "🌟 祈願經驗 (+90 XP)",
             "🪙 祈願財運 (+30 金幣)"
+        );
+    }
+
+    static PendingEncounter createStoryEncounter(int biomeIndex, StoryCatalog.ArcDef arc, StoryCatalog.ChapterDef chapter) {
+        int safeBiome = Math.max(0, Math.min(BIOME_COUNT - 1, biomeIndex));
+        String title = "📖 故事（" + chapter.chapterNumber + "/" + StoryCatalog.CHAPTERS_PER_ARC + "）："
+            + arc.title + "・" + chapter.title;
+        return new PendingEncounter(
+            ENCOUNTER_STORY,
+            safeBiome,
+            title,
+            chapter.prompt,
+            chapter.choiceA,
+            chapter.choiceB
         );
     }
 }

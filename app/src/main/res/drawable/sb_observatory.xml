@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <!-- 星光觀景台 -->
+    <path android:fillColor="#F0E3CC" android:pathData="M14,24 L34,24 L37,42 L11,42 Z" />
+    <path android:fillColor="#548FD6" android:pathData="M12,24 C12,14 17,10 24,10 C31,10 36,14 36,24 Z" />
+    <!-- 望遠鏡筒 -->
+    <path android:fillColor="#3A2A20" android:pathData="M27,14 L40,7 L42,11 L29,18 Z" />
+    <path android:fillColor="#FFD15C" android:pathData="M24,29 L26,34 L22,34 Z" />
+    <path android:fillColor="#FFD15C" android:pathData="M10,10 L11.5,13 L14.5,14 L11.5,15 L10,18 L8.5,15 L5.5,14 L8.5,13 Z" />
+</vector>

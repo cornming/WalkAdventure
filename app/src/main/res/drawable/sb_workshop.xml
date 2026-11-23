@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <!-- 探險工坊小屋與齒輪 -->
+    <path android:fillColor="#F5DEB8" android:pathData="M9,23 L39,23 L39,41 L9,41 Z" />
+    <path android:fillColor="#5B8C5A" android:pathData="M6,24 L24,10 L42,24 Z" />
+    <path android:fillColor="#8C5A3C" android:pathData="M14,29 L24,29 L24,41 L14,41 Z" />
+    <path android:fillColor="#E5A93B" android:pathData="M31,28 A5,5 0 1,1 31,38 A5,5 0 1,1 31,28 Z" />
+    <path android:fillColor="#FFF7E8" android:pathData="M31,31 A2,2 0 1,1 31,35 A2,2 0 1,1 31,31 Z" />
+</vector>

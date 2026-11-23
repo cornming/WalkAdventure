@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <!-- 營火石頭與木柴 -->
+    <path android:fillColor="#8B5A3C" android:pathData="M9,35 L39,29 L40,34 L10,40 Z" />
+    <path android:fillColor="#A46B46" android:pathData="M10,29 L40,35 L39,40 L9,34 Z" />
+    <!-- 外焰 -->
+    <path android:fillColor="#EB6E34" android:pathData="M24,6 C31,14 35,20 35,26 C35,32 30,36 24,36 C18,36 13,32 13,26 C13,20 18,13 24,6 Z" />
+    <!-- 內焰 -->
+    <path android:fillColor="#FFD15C" android:pathData="M24,14 C28,19 30,23 30,27 C30,31 27,34 24,34 C21,34 18,31 18,27 C18,23 20,19 24,14 Z" />
+    <!-- 石圈 -->
+    <path android:fillColor="#B0A08D" android:pathData="M12,38 A3,2 0 1,1 18,38 A3,2 0 1,1 12,38 Z" />
+    <path android:fillColor="#9A8B7A" android:pathData="M21,39 A3.5,2.2 0 1,1 28,39 A3.5,2.2 0 1,1 21,39 Z" />
+    <path android:fillColor="#B0A08D" android:pathData="M31,38 A3,2 0 1,1 37,38 A3,2 0 1,1 31,38 Z" />
+</vector>

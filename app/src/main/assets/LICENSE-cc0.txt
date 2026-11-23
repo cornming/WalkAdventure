@@ -1,0 +1,13 @@
+CC0 1.0 Universal (Public Domain Dedication) — WalkAdventure Storybook Assets
+===========================================================================
+
+All vector drawable illustrations (`res/drawable/sb_*.xml`) bundled with
+WalkAdventure 2.0 are dedicated to the public domain under CC0 1.0 Universal:
+https://creativecommons.org/publicdomain/zero/1.0/
+
+Pluggable CC0 Sprite Support
+----------------------------
+StorybookAssets loads drawables by resource ID (`R.drawable.sb_*`).
+You may replace or override any `sb_*.xml` with CC0 PNG sprite packs
+(for example Kenney CC0 Tiny Town / Nature / UI Packs placed under
+`app/src/main/res/drawable-nodpi/`) without changing Java code.

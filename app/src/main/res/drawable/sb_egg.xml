@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <!-- 神祕蛋底色（由 StorybookAssets 依蛋種染色） -->
+    <path android:fillColor="#FFF4DC" android:pathData="M24,6 C33,6 38,18 38,29 C38,37 32,42 24,42 C16,42 10,37 10,29 C10,18 15,6 24,6 Z" />
+    <path android:fillColor="#70AF74" android:pathData="M16,22 A3.5,3.5 0 1,1 23,22 A3.5,3.5 0 1,1 16,22 Z" />
+    <path android:fillColor="#F5BF42" android:pathData="M27,28 A4,4 0 1,1 35,28 A4,4 0 1,1 27,28 Z" />
+    <path android:fillColor="#E07A3F" android:pathData="M18,33 A2.5,2.5 0 1,1 23,33 A2.5,2.5 0 1,1 18,33 Z" />
+    <!-- 蛋殼高光 -->
+    <path android:fillColor="#88FFFFFF" android:pathData="M18,14 C20,11 23,10 25,11 C22,12 20,15 19,18 Z" />
+</vector>
