@@ -17,7 +17,7 @@ public class GuideStateTest {
         assertTrue(g.shouldShowOnboarding());
         assertEquals(4, GuideState.ONBOARDING_PAGES.length);
         assertEquals(4, GuideState.TAB_TIPS.length);
-        assertEquals(8, GuideState.HELP_TOPICS.length);
+        assertEquals(11, GuideState.HELP_TOPICS.length);
 
         for (int i = 0; i < GuideState.TIP_COUNT; i++) {
             assertTrue("Tip " + i + " should be visible initially", g.shouldShowTabTip(i));

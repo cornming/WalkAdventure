@@ -26,6 +26,8 @@ final class SquadTabController {
         void onStateChanged(String toastMessage);
         void onCopyReportRequested();
         void onBackupRestored(String rawJson);
+        void onOpenFamilyGiftExchange();
+        void onOpenFootprintMap();
     }
 
     private final Context ctx;
@@ -112,6 +114,31 @@ final class SquadTabController {
         });
         squadCard.addView(autoVaultCb);
         container.addView(squadCard, UiKit.cardMargins(ctx));
+
+        // 1.5 Phase 3：離線 QR 家族禮物交換 × 足跡迷霧地圖與環境感應
+        LinearLayout linkCard = UiKit.makeSectionCard(ctx, UiKit.COLOR_CARD_GREEN);
+        UiKit.addCardTitle(ctx, linkCard, "🧭 家族互動與本機足跡探索");
+        String ambient = state.envSensors.ambientBadgeLabel();
+        String linkSub = String.format(
+            Locale.TAIWAN,
+            "已破霧 %d 格（%d 座秘密基地）· 環境彩蛋 %d 次%s",
+            state.footprints.discoveredCount(),
+            state.footprints.namedBaseCount(),
+            state.envSensors.totalSensorEventsTriggered,
+            ambient.isEmpty() ? "" : (" · " + ambient)
+        );
+        UiKit.addCardSubtitle(ctx, linkCard, linkSub);
+        Button giftBtn = UiKit.makeActionButton(ctx, UiKit.COLOR_ACCENT_FIRE, UiKit.COLOR_PRIMARY_TEXT);
+        giftBtn.setText("💌 QR 家族禮物卡");
+        giftBtn.setOnClickListener(v -> host.onOpenFamilyGiftExchange());
+        Button fpBtn = UiKit.makeActionButton(ctx, UiKit.COLOR_PRIMARY, UiKit.COLOR_PRIMARY_TEXT);
+        fpBtn.setText("🗺️ 足跡迷霧地圖");
+        fpBtn.setOnClickListener(v -> host.onOpenFootprintMap());
+        LinearLayout lRow = UiKit.makeButtonRow(ctx, giftBtn, fpBtn);
+        LinearLayout.LayoutParams lLp = UiKit.matchWrap();
+        lLp.setMargins(0, UiKit.dp(ctx, 8), 0, 0);
+        linkCard.addView(lRow, lLp);
+        container.addView(linkCard, UiKit.cardMargins(ctx));
 
         // 2. 近 7 天步數與戰報圖表
         LinearLayout chartCard = UiKit.makeSectionCard(ctx, UiKit.COLOR_CARD_BG);

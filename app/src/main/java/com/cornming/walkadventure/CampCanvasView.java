@@ -320,6 +320,17 @@ final class CampCanvasView extends View {
             }
         }
 
+        // 若今天透過離線 QR 禮物卡邀請到家人的旅伴串門子，在營火右前方草地熱情亮相！
+        if (state.treasure.guestVisit.isActiveOn(clock.isoDate)) {
+            TreasureAndQrState.GuestVisit gv = state.treasure.guestVisit;
+            float gx = 340f + (float) Math.sin(phaseSec * 1.4f) * 6f;
+            float gy = 178f - (float) Math.abs(Math.sin(phaseSec * 3.8f)) * 4f;
+            assets.drawCompanion(c, gx, gy, gv.companionId, gv.companionStage, gv.companionShiny,
+                CompanionSystem.ACC_NONE, 0.78f, animTick, ink);
+            drawPill(c, "💌" + (gv.senderName.length() > 3 ? gv.senderName.substring(0, 3) : gv.senderName) + "作客",
+                gx, gy - 26f, Color.rgb(255, 240, 224), Color.rgb(186, 74, 48));
+        }
+
         // 中央：營火廣場（火焰輕微呼吸＋4 顆上升火星＋待開箱脈動徽章）
         float fireGlow = 39f + (float) Math.sin(phaseSec * 5.2f) * 3.5f;
         p.setColor(Color.argb(72, 255, 194, 96));

@@ -90,7 +90,9 @@ final class PostcardWorkshopController {
         WorldClock.Snapshot clock
     ) {
         ColorScavenger.HuntDef hunt = ColorScavenger.huntById(huntId);
+        NatureVisionEngine.Classification natureCls = mediaStore.analyzeNaturePhoto(photoFilename);
         final int[] selectedStars = {analysis != null ? analysis.suggestedStars : 3};
+        final int[] selectedNatureCat = {natureCls.categoryId};
         final String[] doodleFilename = {""};
         final String[] audioFilename = {""};
 
@@ -110,7 +112,7 @@ final class PostcardWorkshopController {
             preview.setImageBitmap(previewBmp);
         }
         LinearLayout.LayoutParams prevLp = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, UiKit.dp(ctx, 200)
+            ViewGroup.LayoutParams.MATCH_PARENT, UiKit.dp(ctx, 190)
         );
         prevLp.setMargins(0, 0, 0, UiKit.dp(ctx, 8));
         body.addView(preview, prevLp);
@@ -120,6 +122,37 @@ final class PostcardWorkshopController {
         UiKit.addCardTitle(ctx, infoCard, "🔎 本機色彩偵測結果");
         UiKit.addCardSubtitle(ctx, infoCard, analysis != null ? analysis.feedbackText : "已收下照片！");
         body.addView(infoCard, UiKit.cardMargins(ctx));
+
+        // 2.5 Phase 4 端側自然百科視覺鑑定章（含親子小知識與稀有掉落，支援手動改選分類）
+        LinearLayout natureCard = UiKit.makeSectionCard(ctx, UiKit.COLOR_CARD_GREEN);
+        TextView natureTitleTv = UiKit.addCardTitle(ctx, natureCard, natureCls.summaryLine);
+        TextView natureTriviaTv = UiKit.addCardSubtitle(ctx, natureCard, "💡 " + natureCls.category.trivia);
+        TextView natureDropTv = UiKit.addCardSubtitle(ctx, natureCard, "🎁 鑑定稀有掉落：" + natureCls.category.dropSummary);
+        Button switchNatureBtn = UiKit.makeSmallPillButton(ctx, "🔄 改選自然百科分類", UiKit.COLOR_CARD_BG, ctx.getColor(R.color.ink));
+        switchNatureBtn.setOnClickListener(v -> {
+            String[] catNames = new String[NatureVisionEngine.CATEGORIES.length];
+            for (int i = 0; i < NatureVisionEngine.CATEGORIES.length; i++) {
+                NatureVisionEngine.CategoryDef cd = NatureVisionEngine.CATEGORIES[i];
+                catNames[i] = cd.emoji + " " + cd.name + "（" + cd.dropSummary + "）";
+            }
+            new AlertDialog.Builder(ctx)
+                .setTitle("🔬 選擇這張照片的自然百科分類")
+                .setItems(catNames, (d2, which) -> {
+                    selectedNatureCat[0] = which;
+                    NatureVisionEngine.CategoryDef chosen = NatureVisionEngine.category(which);
+                    natureTitleTv.setText("🔬 親子確認分類：" + chosen.emoji + " " + chosen.name + "（" + chosen.badgeTitle + "）");
+                    natureTriviaTv.setText("💡 " + chosen.trivia);
+                    natureDropTv.setText("🎁 鑑定稀有掉落：" + chosen.dropSummary);
+                })
+                .setNegativeButton("維持自動鑑定", null)
+                .show();
+        });
+        LinearLayout.LayoutParams snLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        snLp.setMargins(0, UiKit.dp(ctx, 6), 0, 0);
+        natureCard.addView(switchNatureBtn, snLp);
+        body.addView(natureCard, UiKit.cardMargins(ctx));
 
         // 3. 親子裁判打星列（1★ / 2★ / 3★）
         TextView starHeader = new TextView(ctx);
@@ -225,6 +258,7 @@ final class PostcardWorkshopController {
                     noteInput.getText().toString(),
                     selectedStars[0],
                     analysis,
+                    selectedNatureCat[0],
                     clock
                 );
                 if (outcome.evictedOldest != null) {

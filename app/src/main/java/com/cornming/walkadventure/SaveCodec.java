@@ -280,9 +280,81 @@ final class SaveCodec {
             mo.put("companionStage", (long) mem.companionStage);
             mo.put("companionShiny", mem.companionShiny);
             mo.put("season", (long) mem.season);
+            mo.put("natureCategory", (long) mem.natureCategory);
             memList.add(mo);
         }
         root.put("memories", memList);
+
+        // Phase 3: treasureBox (NFC/QR treasures + Family QR Gifts)
+        Map<String, Object> trObj = new LinkedHashMap<>();
+        trObj.put("totalTreasuresClaimed", (long) state.treasure.totalTreasuresClaimed);
+        trObj.put("totalGiftsExchanged", (long) state.treasure.totalGiftsExchanged);
+        List<Object> trList = new ArrayList<>();
+        for (TreasureAndQrState.HiddenTreasure t : state.treasure.treasures) {
+            Map<String, Object> to = new LinkedHashMap<>();
+            to.put("id", nonNull(t.id));
+            to.put("title", nonNull(t.title));
+            to.put("riddle", nonNull(t.riddle));
+            to.put("nfcUid", nonNull(t.nfcUid));
+            to.put("secretCode", nonNull(t.secretCode));
+            to.put("rewardType", (long) t.rewardType);
+            to.put("createdDate", nonNull(t.createdDate));
+            to.put("claimed", t.claimed);
+            to.put("claimedDate", nonNull(t.claimedDate));
+            trList.add(to);
+        }
+        trObj.put("treasures", trList);
+        trObj.put("redeemedGiftIds", new ArrayList<Object>(state.treasure.redeemedGiftIds));
+        Map<String, Object> guestObj = new LinkedHashMap<>();
+        guestObj.put("senderName", nonNull(state.treasure.guestVisit.senderName));
+        guestObj.put("companionId", (long) state.treasure.guestVisit.companionId);
+        guestObj.put("companionStage", (long) state.treasure.guestVisit.companionStage);
+        guestObj.put("companionShiny", state.treasure.guestVisit.companionShiny);
+        guestObj.put("visitDate", nonNull(state.treasure.guestVisit.visitDate));
+        trObj.put("guestVisit", guestObj);
+        root.put("treasureBox", trObj);
+
+        // Phase 3: footprints (privacy-first relative coarse grid)
+        Map<String, Object> fpObj = new LinkedHashMap<>();
+        fpObj.put("enabled", state.footprints.enabled);
+        fpObj.put("hasAnchor", state.footprints.hasAnchor);
+        fpObj.put("anchorLatGrid", state.footprints.anchorLatGrid);
+        fpObj.put("anchorLonGrid", state.footprints.anchorLonGrid);
+        fpObj.put("lastRx", (long) state.footprints.lastRx);
+        fpObj.put("lastRy", (long) state.footprints.lastRy);
+        fpObj.put("lastManualBaseDate", nonNull(state.footprints.lastManualBaseDate));
+        List<Object> tileList = new ArrayList<>();
+        for (FootprintState.Tile tile : state.footprints.tiles.values()) {
+            Map<String, Object> tio = new LinkedHashMap<>();
+            tio.put("rx", (long) tile.rx);
+            tio.put("ry", (long) tile.ry);
+            tio.put("baseName", nonNull(tile.baseName));
+            tio.put("discoveredDate", nonNull(tile.discoveredDate));
+            tio.put("visitCount", (long) tile.visitCount);
+            tileList.add(tio);
+        }
+        fpObj.put("tiles", tileList);
+        root.put("footprints", fpObj);
+
+        // Phase 3: envSensors
+        Map<String, Object> envObj = new LinkedHashMap<>();
+        envObj.put("lastNightSpriteDate", nonNull(state.envSensors.lastNightSpriteDate));
+        envObj.put("lastSunBlessingDate", nonNull(state.envSensors.lastSunBlessingDate));
+        envObj.put("lastWindChaseDate", nonNull(state.envSensors.lastWindChaseDate));
+        envObj.put("lastRoadsideRestDate", nonNull(state.envSensors.lastRoadsideRestDate));
+        envObj.put("totalSensorEventsTriggered", (long) state.envSensors.totalSensorEventsTriggered);
+        root.put("envSensors", envObj);
+
+        // Phase 4: natureDex
+        Map<String, Object> ndObj = new LinkedHashMap<>();
+        ndObj.put("unlockedMask", (long) state.natureDex.unlockedMask);
+        ndObj.put("completedSets", (long) state.natureDex.encyclopediaCompletedSets);
+        List<Object> ndCounts = new ArrayList<>();
+        for (int c : state.natureDex.categoryCounts) {
+            ndCounts.add((long) c);
+        }
+        ndObj.put("counts", ndCounts);
+        root.put("natureDex", ndObj);
 
         StringBuilder out = new StringBuilder(2048);
         writeJsonValue(out, root);
@@ -534,8 +606,129 @@ final class SaveCodec {
                     asInt(mo.get("companionId"), 0),
                     asInt(mo.get("companionStage"), 1),
                     asBool(mo.get("companionShiny"), false),
-                    asInt(mo.get("season"), 0)
+                    asInt(mo.get("season"), 0),
+                    asInt(mo.get("natureCategory"), -1)
                 ));
+            }
+        }
+
+        // Phase 3: treasureBox
+        state.treasure.treasures.clear();
+        state.treasure.redeemedGiftIds.clear();
+        state.treasure.totalTreasuresClaimed = 0;
+        state.treasure.totalGiftsExchanged = 0;
+        state.treasure.guestVisit.senderName = "";
+        state.treasure.guestVisit.companionId = CompanionSystem.ID_NONE;
+        state.treasure.guestVisit.companionStage = 1;
+        state.treasure.guestVisit.companionShiny = false;
+        state.treasure.guestVisit.visitDate = "";
+        Map<String, Object> trObj = asMap(root.get("treasureBox"));
+        if (trObj != null) {
+            state.treasure.totalTreasuresClaimed = Math.max(0, asInt(trObj.get("totalTreasuresClaimed"), 0));
+            state.treasure.totalGiftsExchanged = Math.max(0, asInt(trObj.get("totalGiftsExchanged"), 0));
+            List<Object> trList = asList(trObj.get("treasures"));
+            if (trList != null) {
+                for (Object o : trList) {
+                    Map<String, Object> to = asMap(o);
+                    if (to == null) continue;
+                    state.treasure.treasures.add(new TreasureAndQrState.HiddenTreasure(
+                        asString(to.get("id"), ""),
+                        asString(to.get("title"), "神祕藏寶箱"),
+                        asString(to.get("riddle"), ""),
+                        asString(to.get("nfcUid"), ""),
+                        asString(to.get("secretCode"), ""),
+                        asInt(to.get("rewardType"), TreasureAndQrState.REWARD_COIN_CHEST),
+                        asString(to.get("createdDate"), ""),
+                        asBool(to.get("claimed"), false),
+                        asString(to.get("claimedDate"), "")
+                    ));
+                    if (state.treasure.treasures.size() >= TreasureAndQrState.MAX_TREASURES) break;
+                }
+            }
+            List<Object> giftIds = asList(trObj.get("redeemedGiftIds"));
+            if (giftIds != null) {
+                for (Object gid : giftIds) {
+                    String s = asString(gid, "");
+                    if (!s.isEmpty()) state.treasure.redeemedGiftIds.add(s);
+                    if (state.treasure.redeemedGiftIds.size() >= TreasureAndQrState.MAX_REDEEMED_GIFTS) break;
+                }
+            }
+            Map<String, Object> guestObj = asMap(trObj.get("guestVisit"));
+            if (guestObj != null) {
+                state.treasure.guestVisit.senderName = asString(guestObj.get("senderName"), "");
+                state.treasure.guestVisit.companionId = Math.max(0, asInt(guestObj.get("companionId"), CompanionSystem.ID_NONE));
+                state.treasure.guestVisit.companionStage = Math.max(1, Math.min(3, asInt(guestObj.get("companionStage"), 1)));
+                state.treasure.guestVisit.companionShiny = asBool(guestObj.get("companionShiny"), false);
+                state.treasure.guestVisit.visitDate = asString(guestObj.get("visitDate"), "");
+            }
+        }
+
+        // Phase 3: footprints
+        state.footprints.enabled = false;
+        state.footprints.hasAnchor = false;
+        state.footprints.anchorLatGrid = 0L;
+        state.footprints.anchorLonGrid = 0L;
+        state.footprints.lastRx = 0;
+        state.footprints.lastRy = 0;
+        state.footprints.lastManualBaseDate = "";
+        state.footprints.tiles.clear();
+        Map<String, Object> fpObj = asMap(root.get("footprints"));
+        if (fpObj != null) {
+            state.footprints.enabled = asBool(fpObj.get("enabled"), false);
+            state.footprints.hasAnchor = asBool(fpObj.get("hasAnchor"), false);
+            state.footprints.anchorLatGrid = asLong(fpObj.get("anchorLatGrid"), 0L);
+            state.footprints.anchorLonGrid = asLong(fpObj.get("anchorLonGrid"), 0L);
+            state.footprints.lastRx = asInt(fpObj.get("lastRx"), 0);
+            state.footprints.lastRy = asInt(fpObj.get("lastRy"), 0);
+            state.footprints.lastManualBaseDate = asString(fpObj.get("lastManualBaseDate"), "");
+            List<Object> tileList = asList(fpObj.get("tiles"));
+            if (tileList != null) {
+                for (Object o : tileList) {
+                    Map<String, Object> tio = asMap(o);
+                    if (tio == null) continue;
+                    FootprintState.Tile tile = new FootprintState.Tile(
+                        asInt(tio.get("rx"), 0),
+                        asInt(tio.get("ry"), 0),
+                        asString(tio.get("baseName"), ""),
+                        asString(tio.get("discoveredDate"), ""),
+                        asInt(tio.get("visitCount"), 1)
+                    );
+                    state.footprints.tiles.put(tile.key(), tile);
+                    if (state.footprints.tiles.size() >= FootprintState.MAX_CELLS) break;
+                }
+            }
+        }
+
+        // Phase 3: envSensors
+        state.envSensors.lastNightSpriteDate = "";
+        state.envSensors.lastSunBlessingDate = "";
+        state.envSensors.lastWindChaseDate = "";
+        state.envSensors.lastRoadsideRestDate = "";
+        state.envSensors.totalSensorEventsTriggered = 0;
+        Map<String, Object> envObj = asMap(root.get("envSensors"));
+        if (envObj != null) {
+            state.envSensors.lastNightSpriteDate = asString(envObj.get("lastNightSpriteDate"), "");
+            state.envSensors.lastSunBlessingDate = asString(envObj.get("lastSunBlessingDate"), "");
+            state.envSensors.lastWindChaseDate = asString(envObj.get("lastWindChaseDate"), "");
+            state.envSensors.lastRoadsideRestDate = asString(envObj.get("lastRoadsideRestDate"), "");
+            state.envSensors.totalSensorEventsTriggered = Math.max(0, asInt(envObj.get("totalSensorEventsTriggered"), 0));
+        }
+
+        // Phase 4: natureDex
+        state.natureDex.unlockedMask = 0;
+        state.natureDex.encyclopediaCompletedSets = 0;
+        for (int i = 0; i < NatureVisionEngine.CATEGORY_COUNT; i++) {
+            state.natureDex.categoryCounts[i] = 0;
+        }
+        Map<String, Object> ndObj = asMap(root.get("natureDex"));
+        if (ndObj != null) {
+            state.natureDex.unlockedMask = asInt(ndObj.get("unlockedMask"), 0);
+            state.natureDex.encyclopediaCompletedSets = Math.max(0, asInt(ndObj.get("completedSets"), 0));
+            List<Object> ndCounts = asList(ndObj.get("counts"));
+            if (ndCounts != null) {
+                for (int i = 0; i < Math.min(ndCounts.size(), NatureVisionEngine.CATEGORY_COUNT); i++) {
+                    state.natureDex.categoryCounts[i] = Math.max(0, asInt(ndCounts.get(i), 0));
+                }
             }
         }
 

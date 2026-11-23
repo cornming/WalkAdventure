@@ -64,6 +64,12 @@ final class AdventureState {
     int photoHuntsCompleted = 0;
     int voiceMemoriesCount = 0;
 
+    // Phase 3 & 4（實體藏寶 NFC/QR、本機足跡迷霧、環境感測彩蛋、端側自然圖鑑）
+    final TreasureAndQrState treasure = new TreasureAndQrState();
+    final FootprintState footprints = new FootprintState();
+    final EnvironmentSensorState envSensors = new EnvironmentSensorState();
+    final NatureVisionEngine.DexState natureDex = new NatureVisionEngine.DexState();
+
     static final class DailyRecord {
         final String date;
         long steps;
@@ -698,7 +704,13 @@ final class AdventureState {
             photoHuntsCompleted >= 1,
             rainbowCompletedSets >= 1 || rainbowCollectedMask == ColorScavenger.RAINBOW_COMPLETE_MASK,
             stories.memories.size() >= 5 || photoHuntsCompleted >= 5,
-            voiceMemoriesCount >= 1
+            voiceMemoriesCount >= 1,
+            treasure.totalTreasuresClaimed >= 1,
+            treasure.totalGiftsExchanged >= 1,
+            footprints.discoveredCount() >= 5,
+            envSensors.totalSensorEventsTriggered >= 1,
+            natureDex.unlockedCount() >= 4,
+            natureDex.isComplete() || natureDex.encyclopediaCompletedSets >= 1
         };
         for (int i = 0; i < AdventureCatalog.EXTRA_ACHIEVEMENTS.length; i++) {
             if (!isExtraAchievementUnlocked(i) && conds[i]) {
@@ -721,6 +733,7 @@ final class AdventureState {
         final StoryCatalog.MemoryEntry created;
         final StoryCatalog.MemoryEntry evictedOldest;
         final boolean completedRainbowSet;
+        final boolean completedNatureDex;
         final int coinsGained;
         final int starSandGained;
         final String message;
@@ -734,10 +747,24 @@ final class AdventureState {
             int starSandGained,
             String message
         ) {
+            this(ok, created, evictedOldest, completedRainbowSet, false, coinsGained, starSandGained, message);
+        }
+
+        PhotoHuntOutcome(
+            boolean ok,
+            StoryCatalog.MemoryEntry created,
+            StoryCatalog.MemoryEntry evictedOldest,
+            boolean completedRainbowSet,
+            boolean completedNatureDex,
+            int coinsGained,
+            int starSandGained,
+            String message
+        ) {
             this.ok = ok;
             this.created = created;
             this.evictedOldest = evictedOldest;
             this.completedRainbowSet = completedRainbowSet;
+            this.completedNatureDex = completedNatureDex;
             this.coinsGained = coinsGained;
             this.starSandGained = starSandGained;
             this.message = message;
@@ -753,10 +780,7 @@ final class AdventureState {
         return Integer.bitCount(rainbowCollectedMask & ColorScavenger.RAINBOW_COMPLETE_MASK);
     }
 
-    /**
-     * 完成一次實境相機尋寶並製成冒險明信片：
-     * 發放金幣、星砂、旅伴羈絆、更新彩虹七色圖鑑，並連動島嶼守護巨獸與成就系統。
-     */
+    /** 相容既有 10 參數呼叫的過載（無自然分類標籤）。 */
     PhotoHuntOutcome completePhotoHunt(
         StepProgress progress,
         String memoryId,
@@ -769,8 +793,30 @@ final class AdventureState {
         ColorScavenger.AnalysisResult analysis,
         WorldClock.Snapshot clock
     ) {
+        return completePhotoHunt(
+            progress, memoryId, huntId, photoPath, doodlePath, audioPath, kidNote, parentStars, analysis, -1, clock
+        );
+    }
+
+    /**
+     * 完成一次實境相機尋寶並製成冒險明信片（含 Phase 4 自然生態端側視覺鑑定與稀有素材加成）：
+     * 發放金幣、星砂、旅伴羈絆、自然素材、更新彩虹七色與自然百科圖鑑，並連動島嶼守護巨獸與成就系統。
+     */
+    PhotoHuntOutcome completePhotoHunt(
+        StepProgress progress,
+        String memoryId,
+        int huntId,
+        String photoPath,
+        String doodlePath,
+        String audioPath,
+        String kidNote,
+        int parentStars,
+        ColorScavenger.AnalysisResult analysis,
+        int natureCategoryId,
+        WorldClock.Snapshot clock
+    ) {
         if (progress == null || clock == null) {
-            return new PhotoHuntOutcome(false, null, null, false, 0, 0, "目前無法儲存明信片");
+            return new PhotoHuntOutcome(false, null, null, false, false, 0, 0, "目前無法儲存明信片");
         }
         ColorScavenger.HuntDef hunt = ColorScavenger.huntById(huntId);
         int clampedStars = Math.max(1, Math.min(3, parentStars));
@@ -784,6 +830,42 @@ final class AdventureState {
         int starGained = hunt.baseStarSand + clampedStars * 4 + (colorMatched ? 4 : 0);
         if (activeCompanionId() == CompanionSystem.ID_OTTER) {
             starGained += 12;
+        }
+
+        // Phase 4：自然生態圖鑑鑑定加成與稀有掉落
+        boolean completedNatureNow = false;
+        String natureBonusTag = "";
+        int safeNatureCat = (natureCategoryId >= 0 && natureCategoryId < NatureVisionEngine.CATEGORY_COUNT)
+            ? natureCategoryId : -1;
+        if (safeNatureCat >= 0) {
+            NatureVisionEngine.CategoryDef nDef = NatureVisionEngine.category(safeNatureCat);
+            boolean firstInDex = natureDex.recordCategory(safeNatureCat);
+            coinsGained += nDef.bonusCoins;
+            starGained += nDef.bonusStarSand;
+            camp.wood += nDef.bonusWood;
+            camp.petals += nDef.bonusPetals;
+            camp.snacks += nDef.bonusSnacks;
+            natureBonusTag = " · 🔬 " + nDef.emoji + nDef.badgeTitle + (firstInDex ? "（新圖鑑！）" : "");
+            if (firstInDex && natureDex.isComplete() && natureDex.encyclopediaCompletedSets == 0) {
+                completedNatureNow = true;
+                natureDex.encyclopediaCompletedSets++;
+                coinsGained += 120;
+                starGained += 40;
+                if (companions.hasFreeEggSlot()) {
+                    companions.addEgg(CompanionSystem.EGG_STAR, frontierBiomeIndex(progress));
+                } else {
+                    enqueueIntoVaultSafe(
+                        progress,
+                        CampfireVault.KIND_EGG,
+                        "自然百科星光奇蹟蛋",
+                        0,
+                        10,
+                        CompanionSystem.EGG_STAR,
+                        clock.isoDate
+                    );
+                }
+                appendLog(clock.isoDate, "🔬 集滿全部 8 種自然生態圖鑑！獲得 +120 金幣、+40 星砂與星光奇蹟蛋！");
+            }
         }
 
         progress.coins += coinsGained;
@@ -823,7 +905,8 @@ final class AdventureState {
             cid,
             cStage,
             cShiny,
-            clock.season
+            clock.season,
+            safeNatureCat
         );
         StoryCatalog.MemoryEntry evicted = stories.addMemory(entry);
 
@@ -866,15 +949,213 @@ final class AdventureState {
         rec.coinsEarned += coinsGained;
         String msg = String.format(
             Locale.TAIWAN,
-            "📮 實境明信片「%s」完成！+%d 金幣、+%d 星砂%s",
+            "📮 實境明信片「%s」完成！+%d 金幣、+%d 星砂%s%s%s",
             hunt.title,
             coinsGained,
             starGained,
-            completedRainbowNow ? " · 🌈 達成彩虹七色全收集大獎！" : ""
+            natureBonusTag,
+            completedRainbowNow ? " · 🌈 達成彩虹七色全收集大獎！" : "",
+            completedNatureNow ? " · 🔬 集滿 8 大自然百科全書！" : ""
         );
         appendLog(clock.isoDate, msg);
         evaluateExtraAchievements(progress, clock.isoDate);
-        return new PhotoHuntOutcome(true, entry, evicted, completedRainbowNow, coinsGained, starGained, msg);
+        return new PhotoHuntOutcome(true, entry, evicted, completedRainbowNow, completedNatureNow, coinsGained, starGained, msg);
+    }
+
+    // ──────────────── Phase 3：實體藏寶（NFC/QR）、家族禮物卡、足跡迷霧、環境感測 ────────────────
+
+    TreasureAndQrState.ClaimOutcome claimHiddenTreasureByNfc(StepProgress progress, String rawHexUid, String today) {
+        TreasureAndQrState.HiddenTreasure hit = treasure.findActiveByNfcUid(rawHexUid);
+        if (hit == null) {
+            return new TreasureAndQrState.ClaimOutcome(
+                false, "這張卡片目前沒有藏寶喔！可以請大人到「實體藏寶工坊」綁定它。", null, 0, 0, 0, 0, -1
+            );
+        }
+        return grantHiddenTreasure(progress, hit, today, "📡 NFC 嗶卡感應成功！");
+    }
+
+    TreasureAndQrState.ClaimOutcome claimHiddenTreasureByCode(StepProgress progress, String rawCodeOrQr, String today) {
+        TreasureAndQrState.HiddenTreasure hit = treasure.findActiveByCodeOrQr(rawCodeOrQr);
+        if (hit == null) {
+            return new TreasureAndQrState.ClaimOutcome(
+                false, "找不到對應的待開啟藏寶碼，請確認大小寫或檢查是否已開啟過囉！", null, 0, 0, 0, 0, -1
+            );
+        }
+        return grantHiddenTreasure(progress, hit, today, "🔎 尋寶密碼解鎖成功！");
+    }
+
+    private TreasureAndQrState.ClaimOutcome grantHiddenTreasure(
+        StepProgress progress,
+        TreasureAndQrState.HiddenTreasure target,
+        String today,
+        String prefix
+    ) {
+        if (progress == null || target == null) {
+            return new TreasureAndQrState.ClaimOutcome(false, "目前無法開啟藏寶箱", null, 0, 0, 0, 0, -1);
+        }
+        target.claimed = true;
+        target.claimedDate = today != null ? today : "";
+        treasure.totalTreasuresClaimed++;
+
+        int coins = 0;
+        int stars = 0;
+        int snacks = 0;
+        int blankets = 0;
+        int eggType = -1;
+        String rewardDetail;
+
+        if (target.rewardType == TreasureAndQrState.REWARD_SNACK_PACK) {
+            snacks = 3;
+            blankets = 1;
+            stars = 12;
+            camp.snacks += snacks;
+            camp.warmBlankets += blankets;
+            camp.starSand += stars;
+            rewardDetail = "點心 ×3、暖蛋毛毯 ×1、星砂 +12";
+        } else if (target.rewardType == TreasureAndQrState.REWARD_MYSTERY_EGG) {
+            coins = 30;
+            stars = 10;
+            eggType = CompanionSystem.EGG_STAR;
+            progress.coins += coins;
+            camp.starSand += stars;
+            if (companions.hasFreeEggSlot()) {
+                companions.addEgg(eggType, frontierBiomeIndex(progress));
+                rewardDetail = "金幣 +30、星砂 +10、星光神祕蛋已放入孵蛋巢！";
+            } else {
+                enqueueIntoVaultSafe(progress, CampfireVault.KIND_EGG, "實體尋寶：" + target.title, 0, 5, eggType, today);
+                rewardDetail = "金幣 +30、星砂 +10、星光神祕蛋已收進營火盒！";
+            }
+        } else {
+            coins = 60;
+            stars = 20;
+            progress.coins += coins;
+            camp.starSand += stars;
+            rewardDetail = "金幣 +60、星砂 +20";
+        }
+
+        stories.bossLookUpDone = true;
+        if (today != null) {
+            ensureDailyRecord(today).coinsEarned += coins;
+        }
+        String msg = prefix + " 找到「" + target.title + "」！獲得 " + rewardDetail;
+        appendLog(today, "🎁 " + msg);
+        evaluateExtraAchievements(progress, today);
+        return new TreasureAndQrState.ClaimOutcome(true, msg, target, coins, stars, snacks, blankets, eggType);
+    }
+
+    TreasureAndQrState.GiftRedeemOutcome redeemFamilyGiftCode(StepProgress progress, String rawQrText, String today) {
+        if (progress == null) {
+            return new TreasureAndQrState.GiftRedeemOutcome(false, "無法領取禮物卡", null);
+        }
+        TreasureAndQrState.FamilyGiftCard card = TreasureAndQrState.parseGiftCard(rawQrText);
+        if (card == null) {
+            return new TreasureAndQrState.GiftRedeemOutcome(false, "禮物卡格式無效或校驗碼不符，請確認有完整貼上喔！", null);
+        }
+        if (treasure.hasRedeemedGift(card.giftId)) {
+            return new TreasureAndQrState.GiftRedeemOutcome(false, "這張家族禮物卡已經領過囉！", card);
+        }
+
+        int coins;
+        int stars;
+        int snacks = 0;
+        int blankets = 0;
+        if (card.giftType == TreasureAndQrState.GIFT_EXPLORER_BOX) {
+            coins = 65;
+            stars = 20;
+            blankets = 1;
+        } else {
+            coins = 35;
+            stars = 15;
+            snacks = 2;
+        }
+        progress.coins += coins;
+        camp.starSand += stars;
+        camp.snacks += snacks;
+        camp.warmBlankets += blankets;
+        treasure.recordRedeemedGift(card, today);
+        if (today != null) {
+            ensureDailyRecord(today).coinsEarned += coins;
+        }
+
+        String guestNote = "";
+        if (card.companionId != CompanionSystem.ID_NONE && CompanionSystem.species(card.companionId) != null) {
+            guestNote = "，「" + card.senderName + "」的 " + CompanionSystem.species(card.companionId).name + " 今天來營地串門子囉！";
+        }
+        String msg = "💌 收到來自「" + card.senderName + "」的家族禮物！+" + coins + " 金幣、+" + stars + " 星砂"
+            + (snacks > 0 ? ("、點心 ×" + snacks) : "")
+            + (blankets > 0 ? ("、毛毯 ×" + blankets) : "")
+            + guestNote;
+        appendLog(today, msg);
+        evaluateExtraAchievements(progress, today);
+        return new TreasureAndQrState.GiftRedeemOutcome(true, msg, card);
+    }
+
+    FootprintState.DiscoveryOutcome recordCoarseFootprint(StepProgress progress, double lat, double lon, String today) {
+        FootprintState.DiscoveryOutcome out = footprints.recordCoarseLocation(lat, lon, today);
+        applyFootprintOutcome(progress, out, today);
+        return out;
+    }
+
+    FootprintState.DiscoveryOutcome recordManualSecretBase(StepProgress progress, String baseName, String today) {
+        FootprintState.DiscoveryOutcome out = footprints.recordManualBaseCheckIn(baseName, today);
+        applyFootprintOutcome(progress, out, today);
+        return out;
+    }
+
+    private void applyFootprintOutcome(StepProgress progress, FootprintState.DiscoveryOutcome out, String today) {
+        if (progress == null || out == null || !out.isNewTile) return;
+        progress.coins += out.coinsGained;
+        camp.starSand += out.starSandGained;
+        if (out.droppedEgg) {
+            if (companions.hasFreeEggSlot()) {
+                companions.addEgg(CompanionSystem.EGG_MIST, frontierBiomeIndex(progress));
+            } else {
+                enqueueIntoVaultSafe(progress, CampfireVault.KIND_EGG, "足跡首探霧林蛋", 0, 5, CompanionSystem.EGG_MIST, today);
+            }
+        }
+        if (today != null) {
+            ensureDailyRecord(today).coinsEarned += out.coinsGained;
+        }
+        appendLog(today, out.message);
+        evaluateExtraAchievements(progress, today);
+    }
+
+    EnvironmentSensorState.TriggerResult applyLightReading(StepProgress progress, float lux, String today) {
+        boolean walkedToday = progress != null && progress.todayStepsOn(today) > 0L;
+        EnvironmentSensorState.TriggerResult res = envSensors.onLightReading(lux, today, walkedToday);
+        if (!res.triggered() || progress == null) return res;
+
+        if (res.eventType == EnvironmentSensorState.EVENT_NIGHT_SPRITE) {
+            camp.starSand += 14;
+            if (companions.hasFreeEggSlot() && companions.eggs.isEmpty()) {
+                companions.addEgg(CompanionSystem.EGG_NIGHT, frontierBiomeIndex(progress));
+            }
+        } else if (res.eventType == EnvironmentSensorState.EVENT_SUN_BLESSING) {
+            camp.starSand += 10;
+            camp.waterGardensByWalk(200L, activeCompanionId() == CompanionSystem.ID_SHEEP);
+        }
+        appendLog(today, res.title + " " + res.message);
+        evaluateExtraAchievements(progress, today);
+        return res;
+    }
+
+    EnvironmentSensorState.TriggerResult applyCadenceSteps(StepProgress progress, long deltaSteps, long nowMs, String today) {
+        EnvironmentSensorState.TriggerResult res = envSensors.onStepBatch(deltaSteps, nowMs, today);
+        if (!res.triggered() || progress == null) return res;
+
+        if (res.eventType == EnvironmentSensorState.EVENT_WIND_CHASE) {
+            progress.coins += 30L;
+            addBonusXp(120L);
+            camp.starSand += 10;
+            if (today != null) ensureDailyRecord(today).coinsEarned += 30L;
+        } else if (res.eventType == EnvironmentSensorState.EVENT_ROADSIDE_REST) {
+            camp.starSand += 8;
+            CompanionSystem.OwnedCompanion oc = companions.getOwned(activeCompanionId());
+            if (oc != null) oc.addBondXp(20);
+        }
+        appendLog(today, res.title + " " + res.message);
+        evaluateExtraAchievements(progress, today);
+        return res;
     }
 
     /** 啟動或換日時同步 2.0 環境狀態（四季護照、每日抬頭任務、家庭壽星禮包與企鵝連勝點心）。 */

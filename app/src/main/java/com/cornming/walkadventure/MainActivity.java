@@ -3,6 +3,7 @@ package com.cornming.walkadventure;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.PendingIntent;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.ClipboardManager;
@@ -17,9 +18,16 @@ import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
+import android.location.Location;
+import android.location.LocationManager;
 import android.net.Uri;
+import android.nfc.NfcAdapter;
+import android.nfc.Tag;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.SystemClock;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
 import android.provider.MediaStore;
 import android.provider.Settings;
 import android.util.TypedValue;
@@ -95,6 +103,7 @@ public class MainActivity extends Activity implements SensorEventListener {
     private static final String KEY_PENDING_MEMORY_ID = "phase2_pending_memory_id";
 
     private static final int REQ_AUDIO = 21;
+    private static final int REQ_LOCATION = 22;
     private static final int REQ_CAMERA_CAPTURE = 30;
     private static final int REQ_PICK_PHOTO = 31;
 
@@ -110,15 +119,20 @@ public class MainActivity extends Activity implements SensorEventListener {
 
     private SensorManager sensorManager;
     private Sensor stepSensor;
+    private Sensor lightSensor;
+    private NfcAdapter nfcAdapter;
     private SharedPreferences prefs;
     private SharedPreferences devicePrefs;
     private StepProgress progress;
     private AdventureState adventure;
     private MemoryMediaStore mediaStore;
     private PostcardWorkshopController workshopController;
+    private TreasureAndFootprintController treasureController;
     private int pendingHuntId = -1;
     private String pendingMemoryId = "";
     private Runnable pendingAudioPermissionCallback;
+    private Runnable pendingLocationPermissionCallback;
+    private long lastLightProcessMs = 0L;
     private Toast activeToast;
     private AlertDialog activeDialog;
     private final Random random = new Random();
@@ -214,9 +228,12 @@ public class MainActivity extends Activity implements SensorEventListener {
         currentVersion = installedVersionName();
         sensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);
         stepSensor = sensorManager != null ? sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) : null;
+        lightSensor = sensorManager != null ? sensorManager.getDefaultSensor(Sensor.TYPE_LIGHT) : null;
+        nfcAdapter = NfcAdapter.getDefaultAdapter(this);
 
         initControllers();
         buildLayout();
+        handleNfcIntent(getIntent());
 
         if (migration.migrated && migration.wasVeteran) {
             showMigrationWelcomeDialog(migration.welcomeMessage);
@@ -256,6 +273,36 @@ public class MainActivity extends Activity implements SensorEventListener {
             }
         });
 
+        treasureController = new TreasureAndFootprintController(this, new TreasureAndFootprintController.Host() {
+            @Override public void onStateChanged(String toastMessage) {
+                commitAndRefresh(toastMessage);
+            }
+
+            @Override public void onCelebrate(int style, String title, String subtitle) {
+                triggerCelebration(style, title, subtitle);
+            }
+
+            @Override public void onVibrateSuccess() {
+                vibrateSuccess();
+            }
+
+            @Override public boolean isNfcAvailable() {
+                return nfcAdapter != null && nfcAdapter.isEnabled();
+            }
+
+            @Override public boolean hasCoarseLocationPermission() {
+                return MainActivity.this.hasCoarseLocationPermission();
+            }
+
+            @Override public void onRequestCoarseLocationPermission(Runnable onGranted) {
+                requestCoarseLocationPermission(onGranted);
+            }
+
+            @Override public void onRefreshFootprintLocation() {
+                refreshCoarseFootprintLocation(true);
+            }
+        }, mediaStore);
+
         workshopController = new PostcardWorkshopController(this, new PostcardWorkshopController.Host() {
             @Override public void onLaunchSystemCamera(int huntId) {
                 launchSystemCamera(huntId);
@@ -281,6 +328,12 @@ public class MainActivity extends Activity implements SensorEventListener {
                             CelebrationOverlayView.STYLE_EVOLVE,
                             "🌈 彩虹七色全制霸！",
                             "獲得花瓣奇蹟神祕蛋與豐厚獎勵！"
+                        );
+                    } else if (toastMessage.contains("自然百科全書")) {
+                        triggerCelebration(
+                            CelebrationOverlayView.STYLE_EVOLVE,
+                            "🔬 自然百科全書制霸！",
+                            "集滿 8 大自然生態，獲贈星光奇蹟蛋！"
                         );
                     } else {
                         triggerCelebration(
@@ -351,6 +404,18 @@ public class MainActivity extends Activity implements SensorEventListener {
             @Override public void onViewPostcard(StoryCatalog.MemoryEntry entry) {
                 workshopController.showPostcardViewerDialog(entry, adventure);
             }
+
+            @Override public void onOpenTreasureHub() {
+                treasureController.showTreasureHubDialog(progress, adventure, WorldClock.now().isoDate);
+            }
+
+            @Override public void onOpenYearbook() {
+                treasureController.showYearbookDialog(progress, adventure, WorldClock.now());
+            }
+
+            @Override public void onOpenNatureCategory(NatureVisionEngine.CategoryDef cat) {
+                treasureController.showNatureCategoryTriviaDialog(cat, adventure);
+            }
         }, mediaStore);
 
         squadController = new SquadTabController(this, new SquadTabController.Host() {
@@ -370,6 +435,14 @@ public class MainActivity extends Activity implements SensorEventListener {
                 }
                 SaveCodec.deserializeInto(rawJson, adventure);
                 commitAndRefresh("已成功還原 2.0 營地備份資料！");
+            }
+
+            @Override public void onOpenFamilyGiftExchange() {
+                treasureController.showFamilyGiftExchangeDialog(progress, adventure, WorldClock.now().isoDate);
+            }
+
+            @Override public void onOpenFootprintMap() {
+                treasureController.showFootprintMapDialog(progress, adventure, WorldClock.now().isoDate);
             }
         });
     }
@@ -1527,6 +1600,10 @@ public class MainActivity extends Activity implements SensorEventListener {
     @Override protected void onResume() {
         super.onResume();
         register();
+        enableNfcForegroundDispatch();
+        if (adventure != null && adventure.footprints.enabled && hasCoarseLocationPermission()) {
+            refreshCoarseFootprintLocation(false);
+        }
         if (activeTab == TAB_ADVENTURE && adventureCanvas != null) {
             adventureCanvas.startIdleAnimation();
         } else if (activeTab == TAB_CAMP && campController != null) {
@@ -1542,11 +1619,18 @@ public class MainActivity extends Activity implements SensorEventListener {
 
     @Override protected void onPause() {
         super.onPause();
+        disableNfcForegroundDispatch();
         if (adventureCanvas != null) adventureCanvas.stopIdleAnimation();
         if (campController != null) campController.stopAnimation();
         if (celebrationOverlay != null) celebrationOverlay.stopAll();
         if (mediaStore != null) mediaStore.releaseAll();
         if (sensorManager != null) sensorManager.unregisterListener(this);
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleNfcIntent(intent);
     }
 
     @Override protected void onDestroy() {
@@ -1572,6 +1656,17 @@ public class MainActivity extends Activity implements SensorEventListener {
             } else {
                 showShortToast("未開啟麥克風權限，仍可照常製作含照片與塗鴉的明信片！");
             }
+            return;
+        }
+        if (requestCode == REQ_LOCATION) {
+            Runnable cb = pendingLocationPermissionCallback;
+            pendingLocationPermissionCallback = null;
+            if (grantResults != null && grantResults.length > 0
+                && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                if (cb != null) cb.run();
+            } else {
+                showShortToast("未開啟粗略定位，仍可使用「手動打卡新秘密基地」暢玩足跡地圖！");
+            }
         }
     }
 
@@ -1582,6 +1677,101 @@ public class MainActivity extends Activity implements SensorEventListener {
     private void requestRecordAudioPermission(Runnable onGranted) {
         pendingAudioPermissionCallback = onGranted;
         requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_AUDIO);
+    }
+
+    private boolean hasCoarseLocationPermission() {
+        return checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void requestCoarseLocationPermission(Runnable onGranted) {
+        pendingLocationPermissionCallback = onGranted;
+        requestPermissions(new String[]{Manifest.permission.ACCESS_COARSE_LOCATION}, REQ_LOCATION);
+    }
+
+    private void enableNfcForegroundDispatch() {
+        if (nfcAdapter == null || !nfcAdapter.isEnabled()) return;
+        try {
+            Intent intent = new Intent(this, getClass()).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            int flags = Build.VERSION.SDK_INT >= 31
+                ? (PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE)
+                : PendingIntent.FLAG_UPDATE_CURRENT;
+            PendingIntent pending = PendingIntent.getActivity(this, 0, intent, flags);
+            nfcAdapter.enableForegroundDispatch(this, pending, null, null);
+        } catch (RuntimeException ignored) {
+            // 部分無完整 NFC 堆疊機型靜默忽略
+        }
+    }
+
+    private void disableNfcForegroundDispatch() {
+        if (nfcAdapter == null) return;
+        try {
+            nfcAdapter.disableForegroundDispatch(this);
+        } catch (RuntimeException ignored) {
+            // 靜默忽略
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private void handleNfcIntent(Intent intent) {
+        if (intent == null || treasureController == null) return;
+        String action = intent.getAction();
+        if (!NfcAdapter.ACTION_TAG_DISCOVERED.equals(action)
+            && !NfcAdapter.ACTION_NDEF_DISCOVERED.equals(action)
+            && !NfcAdapter.ACTION_TECH_DISCOVERED.equals(action)) {
+            return;
+        }
+        Tag tag = Build.VERSION.SDK_INT >= 33
+            ? intent.getParcelableExtra(NfcAdapter.EXTRA_TAG, Tag.class)
+            : intent.getParcelableExtra(NfcAdapter.EXTRA_TAG);
+        if (tag == null) return;
+        String hexUid = TreasureAndQrState.bytesToHexUid(tag.getId());
+        if (!hexUid.isEmpty()) {
+            treasureController.onNfcTagDiscovered(hexUid, progress, adventure, WorldClock.now().isoDate);
+        }
+    }
+
+    private void refreshCoarseFootprintLocation(boolean userInitiated) {
+        if (!adventure.footprints.enabled) return;
+        if (checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+        LocationManager lm = (LocationManager) getSystemService(LOCATION_SERVICE);
+        if (lm == null) return;
+        Location best = null;
+        try {
+            Location netLoc = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+            Location passiveLoc = lm.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER);
+            best = netLoc != null ? netLoc : passiveLoc;
+        } catch (SecurityException | IllegalArgumentException ignored) {
+            return;
+        }
+        if (best == null) {
+            if (userInitiated) {
+                showShortToast("尚未取得粗略定位訊號，可以先走到戶外或改用「手動打卡新秘密基地」！");
+            }
+            return;
+        }
+        FootprintState.DiscoveryOutcome out = adventure.recordCoarseFootprint(
+            progress, best.getLatitude(), best.getLongitude(), WorldClock.now().isoDate
+        );
+        if (out.isNewTile) {
+            commitAndRefresh(out.message);
+            triggerCelebration(CelebrationOverlayView.STYLE_HARVEST, "🗺️ 踩破全新足跡迷霧！", out.message);
+        } else if (userInitiated) {
+            commitAndRefresh("📍 目前所在格已探索過（已累計破霧 " + adventure.footprints.discoveredCount() + " 格）");
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private void vibrateSuccess() {
+        try {
+            Vibrator v = (Vibrator) getSystemService(VIBRATOR_SERVICE);
+            if (v != null && v.hasVibrator()) {
+                v.vibrate(VibrationEffect.createOneShot(90L, VibrationEffect.DEFAULT_AMPLITUDE));
+            }
+        } catch (RuntimeException ignored) {
+            // 無震動硬體或權限時靜默忽略
+        }
     }
 
     @SuppressWarnings("deprecation")
@@ -1702,6 +1892,9 @@ public class MainActivity extends Activity implements SensorEventListener {
     private void register() {
         if (sensorManager != null && stepSensor != null && hasStepPermission()) {
             sensorManager.registerListener(this, stepSensor, SensorManager.SENSOR_DELAY_UI);
+        }
+        if (sensorManager != null && lightSensor != null) {
+            sensorManager.registerListener(this, lightSensor, SensorManager.SENSOR_DELAY_NORMAL);
         }
         refreshAllTabs();
     }
@@ -1840,17 +2033,49 @@ public class MainActivity extends Activity implements SensorEventListener {
     }
 
     @Override public void onSensorChanged(SensorEvent e) {
-        if (e == null || e.sensor == null || e.sensor.getType() != Sensor.TYPE_STEP_COUNTER
-            || e.values == null || e.values.length == 0) {
+        if (e == null || e.sensor == null || e.values == null || e.values.length == 0) {
+            return;
+        }
+        int type = e.sensor.getType();
+        if (type == Sensor.TYPE_LIGHT) {
+            long nowMs = SystemClock.uptimeMillis();
+            if (nowMs - lastLightProcessMs < 3000L) return;
+            lastLightProcessMs = nowMs;
+            EnvironmentSensorState.TriggerResult lightRes = adventure.applyLightReading(
+                progress, e.values[0], WorldClock.now().isoDate
+            );
+            if (lightRes.triggered()) {
+                saveProgress();
+                if (!adventure.family.pocketMode) {
+                    lastNoticeText = lightRes.title + " " + lightRes.message;
+                    showShortToast(lightRes.title);
+                    triggerCelebration(CelebrationOverlayView.STYLE_HARVEST, lightRes.title, lightRes.message);
+                }
+                refreshAllTabs();
+            }
+            return;
+        }
+        if (type != Sensor.TYPE_STEP_COUNTER) {
             return;
         }
         WorldClock.Snapshot clock = WorldClock.now();
         StepProgress.Update update = progress.onSensorReading((long) e.values[0], clock.isoDate, bootCount(), random);
         String rpgNotice = adventure.applyWalkUpdateV2(progress, update, clock, random);
+        EnvironmentSensorState.TriggerResult cadenceRes = adventure.applyCadenceSteps(
+            progress, update.steps, SystemClock.uptimeMillis(), clock.isoDate
+        );
         saveProgress();
+        if (cadenceRes.triggered() && !adventure.family.pocketMode) {
+            triggerCelebration(CelebrationOverlayView.STYLE_EVOLVE, cadenceRes.title, cadenceRes.message);
+            rpgNotice = rpgNotice == null ? (cadenceRes.title + " " + cadenceRes.message)
+                : (rpgNotice + "\n" + cadenceRes.title);
+        }
         if (rpgNotice != null && !adventure.family.pocketMode) {
             lastNoticeText = rpgNotice;
             showShortToast(rpgNotice.replace('\n', ' '));
+        }
+        if (update.steps >= 30L && adventure.footprints.enabled && hasCoarseLocationPermission()) {
+            refreshCoarseFootprintLocation(false);
         }
         refreshAllTabs();
     }
